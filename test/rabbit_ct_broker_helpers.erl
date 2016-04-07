@@ -19,13 +19,14 @@
 -include_lib("rabbit_common/include/rabbit.hrl").
 
 -export([
+    add_test_path_to_broker/2,
     run_on_broker/4,
-    find_listener/0,
+    get_connection_pids/1,
+    get_queue_sup_pid/1,
     test_channel/0
   ]).
 
-run_on_broker(Node, Module, Function, Args) ->
-    %% We add some directories to the broker node search path.
+add_test_path_to_broker(Node, Module) ->
     Path1 = filename:dirname(code:which(Module)),
     Path2 = filename:dirname(code:which(?MODULE)),
     Paths = lists:usort([Path1, Path2]),
@@ -36,7 +37,11 @@ run_on_broker(Node, Module, Function, Args) ->
               true  -> ok;
               false -> true = rpc:call(Node, code, add_pathz, [P])
           end
-      end, Paths),
+      end, Paths).
+
+run_on_broker(Node, Module, Function, Args) ->
+    %% We add some directories to the broker node search path.
+    add_test_path_to_broker(Node, Module),
     %% If there is an exception, rpc:call/4 returns the exception as
     %% a "normal" return value. If there is an exit signal, we raise
     %% it again. In both cases, we have no idea of the module and line
@@ -47,17 +52,34 @@ run_on_broker(Node, Module, Function, Args) ->
         Ret                        -> Ret
     end.
 
-find_listener() ->
-    [#listener{host = H, port = P} | _] =
-        [L || L = #listener{node = N, protocol = amqp}
-                  <- rabbit_networking:active_listeners(),
-              N =:= node()],
-    {H, P}.
+%% From a given list of gen_tcp client connections, return the list of
+%% connection handler PID in RabbitMQ.
+get_connection_pids(Connections) ->
+    ConnInfos = [
+      begin
+          {ok, {Addr, Port}} = inet:sockname(Connection),
+          [{peer_host, Addr}, {peer_port, Port}]
+      end || Connection <- Connections],
+    lists:filter(
+      fun(Conn) ->
+          ConnInfo = rabbit_networking:connection_info(Conn,
+            [peer_host, peer_port]),
+          lists:member(ConnInfo, ConnInfos)
+      end, rabbit_networking:connections()).
 
-user(Username) ->
-    #user{username       = Username,
-          tags           = [administrator],
-          authz_backends = [{rabbit_auth_backend_internal, none}]}.
+%% Return the PID of the given queue's supervisor.
+get_queue_sup_pid(QueuePid) ->
+    Sups = supervisor:which_children(rabbit_amqqueue_sup_sup),
+    get_queue_sup_pid(Sups, QueuePid).
+
+get_queue_sup_pid([{_, SupPid, _, _} | Rest], QueuePid) ->
+    WorkerPids = [Pid || {_, Pid, _, _} <- supervisor:which_children(SupPid)],
+    case lists:member(QueuePid, WorkerPids) of
+        true  -> SupPid;
+        false -> get_queue_sup_pid(Rest, QueuePid)
+    end;
+get_queue_sup_pid([], _QueuePid) ->
+    undefined.
 
 test_channel() ->
     Me = self(),
@@ -76,3 +98,8 @@ test_writer(Pid) ->
                                       test_writer(Pid);
         shutdown                   -> ok
     end.
+
+user(Username) ->
+    #user{username       = Username,
+          tags           = [administrator],
+          authz_backends = [{rabbit_auth_backend_internal, none}]}.
