@@ -60,8 +60,8 @@ get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R
         [] -> get_destinations (X, Headers, R, Dests);
         %% Binding type is all
 % Do we have to care about last_nx_key ??
-        [#headers_bindings{destination=Dest, binding_type=all, last_nxkey=_, cargs=TransformedArgs}] ->
-            case (false =:= lists:member (Dest, Dests)) andalso headers_match_all(TransformedArgs, Headers) of
+        [#headers_bindings{destination=Dest, binding_type=all, last_nxkey=LNXK, cargs=TransformedArgs}] ->
+            case (false =:= lists:member (Dest, Dests)) andalso headers_match_all(TransformedArgs, Headers, LNXK) of
                 true -> get_destinations (X, Headers, R, [Dest | Dests]);
                 _ -> get_destinations (X, Headers, R, Dests)
             end;
@@ -92,87 +92,89 @@ validate_binding(_X, #binding{args = Args}) ->
     end.
 
 
-% What if data headers null ?
-
 %% !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 %% REQUIRES BOTH PATTERN AND DATA TO BE SORTED ASCENDING BY KEY.
 %% !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 % No more binding header to match with, return false
 headers_match_any([], _, _) -> false;
-% Current op is nx but no more data (means key does not exists), return true
-headers_match_any([{_,nx,_} | _], [], _) -> true;
 % No more data and no nx op, return false
 headers_match_any([_], [], nonx) -> false;
-% No more data but "still" nx op, return true
+% No more data but nx op (so those keys not exist), return true
 headers_match_any([_], [], _) -> true;
 % Go next data to match current binding key
 headers_match_any(P = [{PK, _, _} | _], [{DK, _, _} | DRest], LNXK)
-    when PK > DK -> io:format("~p ", [?LINE]), headers_match_any(P, DRest, LNXK);
+    when PK > DK -> headers_match_any(P, DRest, LNXK);
 % Current binding key must not exist in data, return true
 headers_match_any([{PK, nx,_} | _], [{DK, _, _} | _], _)
     when PK < DK -> true;
 % Current binding key does not exist in data, go next binding key
 headers_match_any([{PK, _, _} | PRest], D = [{DK, _, _} | _], LNXK)
-    when PK < DK -> io:format("~p ", [?LINE]), headers_match_any(PRest, D, LNXK);
+    when PK < DK -> headers_match_any(PRest, D, LNXK);
 % ---------------------
 % From here, PK == DK :
 % ---------------------
 headers_match_any([{_, ex,_} | _], _, _) -> true;
-headers_match_any([{_, eq, PV} | _], [{_, _, DV} | _], _) when PV == DV -> true;
-headers_match_any([{_, ne, PV} | _], [{_, _, DV} | _], _) when PV /= DV -> true;
+headers_match_any([{_, eq, PV} | _], [{_, _, DV} | _], _) when DV == PV -> true;
+headers_match_any([{_, ne, PV} | _], [{_, _, DV} | _], _) when DV /= PV -> true;
 headers_match_any([{_, gt, PV} | _], [{_, _, DV} | _], _) when DV > PV -> true;
 headers_match_any([{_, ge, PV} | _], [{_, _, DV} | _], _) when DV >= PV -> true;
 headers_match_any([{_, lt, PV} | _], [{_, _, DV} | _], _) when DV < PV -> true;
 headers_match_any([{_, le, PV} | _], [{_, _, DV} | _], _) when DV =< PV -> true;
-headers_match_any([_ | PRest], [_ | DRest], LNXK) -> io:format("~p ", [?LINE]),
+% Nothing match, go next
+headers_match_any([_ | PRest], [_ | DRest], LNXK) ->
     headers_match_any(PRest, DRest, LNXK).
 
-% Binding type is all :
-% If there is no header binding nor header data then do match,
-headers_match_all([], []) -> io:format("1-",[]), true;
-% if there is no header binding then do not match,
-headers_match_all([], _) -> io:format("2-",[]), false;
+
+% No more binding header to match with, return true
+headers_match_all([], _, _) -> true;
+% No more data and no nx op, return false
+headers_match_all([_], [], nonx) -> false;
+
 % if there is no data header then do not mtach,
-headers_match_all(_, []) -> io:format("3-",[]), false;
-% else,
-%     if key binding greater than key data then go next,
-headers_match_all(P = [{PK, _, _} | _], [{DK, _, _} | DRest])
-    when PK > DK -> io:format("4-",[]), headers_match_all(P, DRest);
-%     if key binding less than key data then do not match,
-headers_match_all([{PK, _, _} | _], [{DK, _, _} | _])
-    when PK < DK -> io:format("5-",[]), false;
-% From here, we know that PK = DK
-% So if key must exists go next..
-headers_match_all([{_, ex} | PRest], DRest) ->
-    io:format("6-",[]), headers_match_all(PRest, DRest);
-% but if key must NOT exists then it don't match..
-headers_match_all([{_, nx} | _], _) ->
+%headers_match_all(_, [], _) -> io:format("3-",[]), false;
+
+
+% Go next data to match current binding key
+headers_match_all(P = [{PK, _, _} | _], [{DK, _, _} | DRest], NX)
+    when PK > DK -> headers_match_all(P, DRest, NX);
+% Current binding key must not exist in data, go next binding
+headers_match_all([{PK, nx,_} | PRest], D = [{DK, _, _} | _], NX)
+    when PK < DK -> headers_match_all(PRest, D, NX);
+% Current binding key does not exist in data, return false
+headers_match_all([{PK, _, _} | _], [{DK, _, _} | _], _)
+    when PK < DK -> false;
+% ---------------------
+% From here, PK == DK :
+% ---------------------
+% WARNS : do not "x-?ex n" AND "x-?* n" it does not work !
+% If key must exists go next
+headers_match_all([{_, ex,_} | PRest], [{_, _, _} | DRest], NX) ->
+    io:format("6-",[]), headers_match_all(PRest, DRest, NX);
+% Key must not exist, return false
+headers_match_all([{_, nx,_} | _], _, _) ->
     io:format("14-",[]), false;
 % else if values must match and it matches then go next..
-headers_match_all([{_, eq, PV} | PRest], [{_, _, DV} | DRest])
-    when PV == DV -> io:format("7-",[]), headers_match_all(PRest, DRest);
-% if it don't matches then don't match..
-headers_match_all([{_, eq, _} | _], _) -> false;
-% but if value must be different then go next..
-headers_match_all([{_, ne, PV} | PRest], [{_, _, DV} | DRest])
-    when PV /= DV -> io:format("8-",[]), headers_match_all(PRest, DRest);
-% else if it match don't match..
-headers_match_all([{_, ne, _} | _], _) -> false;
-headers_match_all([{_, gt, PV} | PRest], [{_, _, DV} | DRest])
-    when DV > PV -> io:format("9-",[]), headers_match_all(PRest, DRest);
-headers_match_all([{_, gt, _} | _], _) -> false;
-headers_match_all([{_, ge, PV} | PRest], [{_, _, DV} | DRest])
-    when DV >= PV -> io:format("10-",[]), headers_match_all(PRest, DRest);
-headers_match_all([{_, ge, _} | _], _) -> false;
-headers_match_all([{_, lt, PV} | PRest], [{_, _, DV} | DRest])
-    when DV < PV -> io:format("11-",[]), headers_match_all(PRest, DRest);
-headers_match_all([{_, lt, _} | _], _) -> false;
-headers_match_all([{_, le, PV} | PRest], [{_, _, DV} | DRest])
-    when DV =< PV -> io:format("12-",[]), headers_match_all(PRest, DRest);
-headers_match_all([{_, le, _} | _], _) -> false;
-headers_match_all([_ | PRest], [_ | DRest]) ->
-    io:format("13-",[]), headers_match_all(PRest, DRest).
+headers_match_all([{_, eq, PV} | PRest], [{_, _, DV} | DRest], NX)
+    when PV == DV -> io:format("7-",[]), headers_match_all(PRest, DRest, NX);
+headers_match_all([{_, eq, _} | _], _, _) -> false;
+headers_match_all([{_, ne, PV} | PRest], [{_, _, DV} | DRest], NX)
+    when PV /= DV -> io:format("8-",[]), headers_match_all(PRest, DRest, NX);
+headers_match_all([{_, ne, _} | _], _, _) -> false;
+headers_match_all([{_, gt, PV} | PRest], [{_, _, DV} | DRest], NX)
+    when DV > PV -> io:format("9-",[]), headers_match_all(PRest, DRest, NX);
+headers_match_all([{_, gt, _} | _], _, _) -> false;
+headers_match_all([{_, ge, PV} | PRest], [{_, _, DV} | DRest], NX)
+    when DV >= PV -> io:format("10-",[]), headers_match_all(PRest, DRest, NX);
+headers_match_all([{_, ge, _} | _], _, _) -> false;
+headers_match_all([{_, lt, PV} | PRest], [{_, _, DV} | DRest], NX)
+    when DV < PV -> io:format("11-",[]), headers_match_all(PRest, DRest, NX);
+headers_match_all([{_, lt, _} | _], _, _) -> false;
+headers_match_all([{_, le, PV} | PRest], [{_, _, DV} | DRest], NX)
+    when DV =< PV -> io:format("12-",[]), headers_match_all(PRest, DRest, NX);
+headers_match_all([{_, le, _} | _], _, _) -> false.
+%headers_match_all([_ | PRest], [_ | DRest], _) ->
+%    io:format("13-",[]), headers_match_all(PRest, DRest, _).
 
 
 %% Delete x-* keys and ignore types excepted "void" used to match existence
@@ -210,23 +212,18 @@ transform_binding_args([ {K, _T, V} | R ], Result, BT, LNXK) ->
     transform_binding_args (R, [ {K, eq, V} | Result], BT, LNXK).
 
 
-
+% Store the new "binding id" in rabbit_headers_bindings_keys whose key is X
+%  and store new transformed binding headers
 add_binding(transaction, X, BindingToAdd = #binding{destination = Dest, args = Args}) ->
     BindingId = crypto:hash(md5,term_to_binary(BindingToAdd)),
-io:format ("AA", []),
     { CleanArgs, BindingType, LNXK } = transform_binding_args (Args),
-io:format ("CA ~p~nBT ~p~nNX ~p~n", [CleanArgs, BindingType, LNXK]),
     NewR = #headers_bindings_keys{exchange = X, binding_id = BindingId},
-io:format ("m ", []),
     mnesia:write (rabbit_headers_bindings_keys, NewR, write),
-io:format ("k ", []),
     XR = #headers_bindings{exch_bind = {X, BindingId}, destination = Dest, binding_type = BindingType, last_nxkey = LNXK, cargs = rabbit_misc:sort_field_table(CleanArgs)},
-io:format ("j : ~p~n", [XR]),
-    mnesia:write (rabbit_headers_bindings, XR, write),
-io:format ("i ", []);
+    mnesia:write (rabbit_headers_bindings, XR, write);
 add_binding(_Tx, _X, _B) -> ok.
 
-%% Bs is a list here
+
 remove_bindings(transaction, X, Bs) ->
     BindingsIDs_todel = [ crypto:hash(md5,term_to_binary(Binding)) || Binding <- Bs ],
 
