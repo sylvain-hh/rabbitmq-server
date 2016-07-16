@@ -100,16 +100,15 @@ validate_binding(_X, #binding{args = Args}) ->
 
 % No more binding header to match with, return false
 headers_match_any([], _, _) -> false;
-% Purge ex op on no data
-headers_match_any([{_, ex,_} | PRest], [], NX) ->
-    io:format("19-",[]), headers_match_any(PRest, [], NX);
-% nx op on no data is true
-headers_match_any([{_, nx,_} | _], [], _) ->
-    io:format("21-",[]), true;
 % No more data and no nx op, return false
 headers_match_any([_], [], nonx) -> false;
-% No more data but nx op (so those keys not exist), return true
-headers_match_any([_], [], _) -> true;
+% Last nx op is after (or is) current key, return true
+headers_match_any([{PK, _, _} | _], [], LNXK)
+    when PK =< LNXK -> true;
+% There won't be other nx op in bindings, return false
+headers_match_any([{PK, _, _} | _], [], LNXK)
+    when PK > LNXK -> false;
+
 % Go next data to match current binding key
 headers_match_any(P = [{PK, _, _} | _], [{DK, _, _} | DRest], LNXK)
     when PK > DK -> headers_match_any(P, DRest, LNXK);
@@ -136,15 +135,13 @@ headers_match_any([_ | PRest], D, LNXK) ->
 
 % No more binding header to match with, return true
 headers_match_all([], _, _) -> true;
+% No more data and no nx op, return false
+headers_match_any([_], [], nonx) -> false;
 % Purge nx op on no data
 headers_match_all([{_, nx,_} | PRest], [], NX) ->
     io:format("19-",[]), headers_match_all(PRest, [], NX);
 % No more data with some op other than nx, return false
 headers_match_all([_], [], _) -> false;
-
-% if there is no data header then do not mtach,
-%headers_match_all(_, [], _) -> io:format("3-",[]), false;
-
 
 % Go next data to match current binding key
 headers_match_all(P = [{PK, _, _} | _], [{DK, _, _} | DRest], NX)
@@ -160,14 +157,14 @@ headers_match_all([{PK, _, _} | _], [{DK, _, _} | _], _)
 % ---------------------
 % WARNS : do not "x-?ex n" AND "x-?* n" it does not work !
 % If key must exists go next
-headers_match_all([{_, ex,_} | PRest], [{_, _, _} | DRest], NX) ->
+headers_match_all([{_, ex,_} | PRest], [ _ | DRest], NX) ->
     io:format("6-",[]), headers_match_all(PRest, DRest, NX);
-% Key must not exist, return false
-headers_match_all([{_, nx,_} | _], _, _) -> false;
 % else if values must match and it matches then go next..
 headers_match_all([{_, eq, PV} | PRest], [{_, _, DV} | DRest], NX)
     when PV == DV -> io:format("7-",[]), headers_match_all(PRest, DRest, NX);
 headers_match_all([{_, eq, _} | _], _, _) -> false;
+% Key must not exist, return false
+headers_match_all([{_, nx,_} | _], _, _) -> false;
 headers_match_all([{_, ne, PV} | PRest], D = [{_, _, DV} | _], NX)
     when PV /= DV -> io:format("8-",[]), headers_match_all(PRest, D, NX);
 headers_match_all([{_, ne, _} | _], _, _) -> false;
