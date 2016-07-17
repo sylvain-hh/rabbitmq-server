@@ -77,6 +77,11 @@ io:format ("Binding type any :~n~p~n", [TransformedArgs]),
     end.
 
 
+get_match_order(Args) ->
+    case rabbit_misc:table_lookup(Args, <<"x-match-order">>) of
+        {integer, Order} -> Order;
+	_ -> 0
+    end.
 
 
 validate_binding(_X, #binding{args = Args}) ->
@@ -235,12 +240,12 @@ add_binding(_Tx, _X, _B) -> ok.
 
 
 remove_bindings(transaction, X, Bs) ->
-    BindingsIDs_todel = [ crypto:hash(md5,term_to_binary(Binding)) || Binding <- Bs ],
+    BindingsIDs_todel = [ {get_match_order(Args),crypto:hash(md5,term_to_binary(Binding)) } || Binding=#binding{args=Args} <- Bs ],
 
-    lists:foreach (fun(BindingID_todel) -> mnesia:delete ({ rabbit_headers_bindings, { X, BindingID_todel } }) end, BindingsIDs_todel),
+    lists:foreach (fun({Order,BindingID_todel}) -> mnesia:delete ({ rabbit_headers_bindings, { X, {Order, BindingID_todel } } }) end, BindingsIDs_todel),
     lists:foreach (
-        fun(BindingID_todel) ->
-            R_todel = #headers_bindings_keys{exchange = X, binding_id = BindingID_todel},
+        fun({Order,BindingID_todel}) ->
+            R_todel = #headers_bindings_keys{exchange = X, binding_id = {Order,BindingID_todel}},
             mnesia:delete_object (rabbit_headers_bindings_keys, R_todel, write)
         end, BindingsIDs_todel);
 remove_bindings(_Tx, _X, _Bs) -> ok.
