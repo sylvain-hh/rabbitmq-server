@@ -226,10 +226,10 @@ transform_binding_args([ {K, _T, V} | R ], Result, BT, Order, LNXK) ->
 %  and store new transformed binding headers
 add_binding(transaction, X, BindingToAdd = #binding{destination = Dest, args = Args}) ->
     BindingId = crypto:hash(md5,term_to_binary(BindingToAdd)),
-    { CleanArgs, BindingType, _, LNXK } = transform_binding_args (Args),
-    NewR = #headers_bindings_keys{exchange = X, binding_id = BindingId},
+    { CleanArgs, BindingType, Order, LNXK } = transform_binding_args (Args),
+    NewR = #headers_bindings_keys{exchange = X, binding_id = {Order,BindingId}},
     mnesia:write (rabbit_headers_bindings_keys, NewR, write),
-    XR = #headers_bindings{exch_bind = {X, BindingId}, destination = Dest, binding_type = BindingType, last_nxkey = LNXK, cargs = rabbit_misc:sort_field_table(CleanArgs)},
+    XR = #headers_bindings{exch_bind = {X, {Order,BindingId}}, destination = Dest, binding_type = BindingType, last_nxkey = LNXK, cargs = rabbit_misc:sort_field_table(CleanArgs)},
     mnesia:write (rabbit_headers_bindings, XR, write);
 add_binding(_Tx, _X, _B) -> ok.
 
