@@ -62,25 +62,24 @@ get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R
         %% Binding type is all
 % Do we have to care about last_nx_key ??
         [#headers_bindings{destination=Dest, binding_type=all, last_nxkey=LNXK, cargs=TransformedArgs}] ->
-io:format ("Binding type all :~n~p~n", [TransformedArgs]),
             case (false =:= lists:member (Dest, Dests)) andalso headers_match_all(TransformedArgs, Headers, LNXK) of
                 true -> get_destinations (X, Headers, R, [Dest | Dests]);
                 _ -> get_destinations (X, Headers, R, Dests)
             end;
         %% Binding type is any
         [#headers_bindings{destination=Dest, binding_type=any, last_nxkey=LNXK, cargs=TransformedArgs}] ->
-io:format ("Binding type any :~n~p~n", [TransformedArgs]),
             case (false =:= lists:member (Dest, Dests)) andalso headers_match_any(TransformedArgs, Headers, LNXK) of
                 true -> get_destinations (X, Headers, R, [Dest | Dests]);
                 _ -> get_destinations (X, Headers, R, Dests)
             end
     end.
 
+default_match_order() -> 1000.
 
 get_match_order(Args) ->
     case rabbit_misc:table_lookup(Args, <<"x-match-order">>) of
-        {integer, Order} -> Order;
-	_ -> 0
+        {long, Order} -> Order;
+	_ -> default_match_order()
     end.
 
 
@@ -145,7 +144,7 @@ headers_match_all([], _, _) -> true;
 headers_match_all([_], [], nonx) -> false;
 % Purge nx op on no data
 headers_match_all([{_, nx, _} | PRest], [], NX) ->
-    io:format("19-",[]), headers_match_all(PRest, [], NX);
+    headers_match_all(PRest, [], NX);
 % No more data with some op other than nx, return false
 headers_match_all([_], [], _) -> false;
 
@@ -164,34 +163,32 @@ headers_match_all([{PK, _, _} | _], [{DK, _, _} | _], _)
 % WARNS : do not "x-?ex n" AND "x-?* n" it does not work !
 % If key must exists go next
 headers_match_all([{_, ex,_} | PRest], [ _ | DRest], NX) ->
-    io:format("6-",[]), headers_match_all(PRest, DRest, NX);
+    headers_match_all(PRest, DRest, NX);
 % else if values must match and it matches then go next..
 headers_match_all([{_, eq, PV} | PRest], [{_, _, DV} | DRest], NX)
-    when PV == DV -> io:format("7-",[]), headers_match_all(PRest, DRest, NX);
+    when PV == DV -> headers_match_all(PRest, DRest, NX);
 headers_match_all([{_, eq, _} | _], _, _) -> false;
 % Key must not exist, return false
 headers_match_all([{_, nx,_} | _], _, _) -> false;
 headers_match_all([{_, ne, PV} | PRest], D = [{_, _, DV} | _], NX)
-    when PV /= DV -> io:format("8-",[]), headers_match_all(PRest, D, NX);
+    when PV /= DV -> headers_match_all(PRest, D, NX);
 headers_match_all([{_, ne, _} | _], _, _) -> false;
 headers_match_all([{_, gt, PV} | PRest], D = [{_, _, DV} | _], NX)
-    when DV > PV -> io:format("9-",[]), headers_match_all(PRest, D, NX);
+    when DV > PV -> headers_match_all(PRest, D, NX);
 headers_match_all([{_, gt, _} | _], _, _) -> false;
 headers_match_all([{_, ge, PV} | PRest], D = [{_, _, DV} | _], NX)
-    when DV >= PV -> io:format("10-",[]), headers_match_all(PRest, D, NX);
+    when DV >= PV -> headers_match_all(PRest, D, NX);
 headers_match_all([{_, ge, _} | _], _, _) -> false;
 headers_match_all([{_, lt, PV} | PRest], D = [{_, _, DV} | _], NX)
-    when DV < PV -> io:format("11-",[]), headers_match_all(PRest, D, NX);
+    when DV < PV -> headers_match_all(PRest, D, NX);
 headers_match_all([{_, lt, _} | _], _, _) -> false;
 headers_match_all([{_, le, PV} | PRest], D = [{_, _, DV} | _], NX)
-    when DV =< PV -> io:format("12-",[]), headers_match_all(PRest, D, NX);
+    when DV =< PV -> headers_match_all(PRest, D, NX);
 headers_match_all([{_, le, _} | _], _, _) -> false.
-%headers_match_all([_ | PRest], [_ | DRest], _) ->
-%    io:format("13-",[]), headers_match_all(PRest, DRest, _).
 
 
 %% Delete x-* keys and ignore types excepted "void" used to match existence
-transform_binding_args(Args) -> transform_binding_args(Args, [], all, 0, nonx).
+transform_binding_args(Args) -> transform_binding_args(Args, [], all, default_match_order(), nonx).
 
 transform_binding_args([], Result, BT, Order, LNXK) -> { Result, BT, Order, LNXK };
 transform_binding_args([ {K, void, _V} | R ], Result, BT, Order, LNXK) ->
@@ -219,7 +216,7 @@ transform_binding_args([{<<"x-match">>, longstr, <<"any">>} | R], Result, _, Ord
     transform_binding_args (R, Result, any, Order, LNXK);
 transform_binding_args([{<<"x-match">>, longstr, <<"all">>} | R], Result, _, Order, LNXK) ->
     transform_binding_args (R, Result, all, Order, LNXK);
-transform_binding_args([{<<"x-match-order">>, integer, Order} | R], Result, BT, _, LNXK) ->
+transform_binding_args([{<<"x-match-order">>, long, Order} | R], Result, BT, _, LNXK) ->
     transform_binding_args (R, Result, BT, Order, LNXK);
 transform_binding_args([ {<<"x-", _/binary>>, _T, _V} | R ], Result, BT, Order, LNXK) ->
     transform_binding_args (R, Result, BT, Order, LNXK);
@@ -235,12 +232,18 @@ add_binding(transaction, X, BindingToAdd = #binding{destination = Dest, args = A
     NewR = #headers_bindings_keys{exchange = X, binding_id = {Order,BindingId}},
     mnesia:write (rabbit_headers_bindings_keys, NewR, write),
     XR = #headers_bindings{exch_bind = {X, {Order,BindingId}}, destination = Dest, binding_type = BindingType, last_nxkey = LNXK, cargs = rabbit_misc:sort_field_table(CleanArgs)},
-    mnesia:write (rabbit_headers_bindings, XR, write);
+    mnesia:write (rabbit_headers_bindings, XR, write),
+
+    % Reorder results by x-match-order
+    SortedValues = lists:sort (mnesia:read (rabbit_headers_bindings_keys, X)),
+    lists:foreach (fun(K) -> mnesia:delete (rabbit_headers_bindings_keys, K, write) end, mnesia:all_keys(rabbit_headers_bindings_keys)),
+    lists:foreach (fun(OrderedBinding) -> mnesia:write (rabbit_headers_bindings_keys, OrderedBinding, write) end, SortedValues);
+
 add_binding(_Tx, _X, _B) -> ok.
 
 
 remove_bindings(transaction, X, Bs) ->
-    BindingsIDs_todel = [ {get_match_order(Args),crypto:hash(md5,term_to_binary(Binding)) } || Binding=#binding{args=Args} <- Bs ],
+    BindingsIDs_todel = [ {get_match_order(Args), crypto:hash(md5,term_to_binary(Binding)) } || Binding=#binding{args=Args} <- Bs ],
 
     lists:foreach (fun({Order,BindingID_todel}) -> mnesia:delete ({ rabbit_headers_bindings, { X, {Order, BindingID_todel } } }) end, BindingsIDs_todel),
     lists:foreach (
