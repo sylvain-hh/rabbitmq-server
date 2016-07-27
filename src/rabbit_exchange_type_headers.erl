@@ -142,13 +142,13 @@ headers_match_any([_ | PRest], D, LNXK) ->
 headers_match_all([], _, _) -> true;
 % No more data and no nx op, return false
 headers_match_all([_], [], nonx) -> false;
-% Purge nx op on no data
+% Purge nx op on no data as all these are true
 headers_match_all([{_, nx, _} | PRest], [], NX) ->
     headers_match_all(PRest, [], NX);
 % No more data with some op other than nx, return false
 headers_match_all([_], [], _) -> false;
 
-% Go next data to match current binding key
+% Current data key is not in binding, go next data
 headers_match_all(P = [{PK, _, _} | _], [{DK, _, _} | DRest], NX)
     when PK > DK -> headers_match_all(P, DRest, NX);
 % Current binding key must not exist in data, go next binding
@@ -186,6 +186,19 @@ headers_match_all([{_, le, PV} | PRest], D = [{_, _, DV} | _], NX)
     when DV =< PV -> headers_match_all(PRest, D, NX);
 headers_match_all([{_, le, _} | _], _, _) -> false.
 
+
+
+%% Flatten one level for list of values (array)
+flatten_bindings_args(Args) ->
+	flatten_bindings_args(Args, []).
+
+flatten_bindings_args([], Result) -> Result;
+flatten_bindings_args ([ {K, array, Vs} | R ], Result) ->
+	Res = [ { K, T, V } || {T, V} <- Vs ],
+	flatten_bindings_args (R, lists:append ([ Res , Result ]));
+flatten_bindings_args ([ {K, T, V} | R ], Result) ->
+	flatten_bindings_args (R, [ {K, T, V} | Result ]).
+	
 
 %% Delete x-* keys and ignore types excepted "void" used to match existence
 transform_binding_args(Args) -> transform_binding_args(Args, [], all, default_match_order(), nonx).
@@ -228,17 +241,18 @@ transform_binding_args([ {K, _T, V} | R ], Result, BT, Order, LNXK) ->
 %  and store new transformed binding headers
 add_binding(transaction, X, BindingToAdd = #binding{destination = Dest, args = Args}) ->
     BindingId = crypto:hash(md5,term_to_binary(BindingToAdd)),
-    { CleanArgs, BindingType, Order, LNXK } = transform_binding_args (Args),
+    FArgs = flatten_bindings_args(Args),
+    { CleanArgs, BindingType, Order, LNXK } = transform_binding_args (FArgs),
     NewR = #headers_bindings_keys{exchange = X, binding_id = {Order,BindingId}},
     mnesia:write (rabbit_headers_bindings_keys, NewR, write),
     XR = #headers_bindings{exch_bind = {X, {Order,BindingId}}, destination = Dest, binding_type = BindingType, last_nxkey = LNXK, cargs = rabbit_misc:sort_field_table(CleanArgs)},
     mnesia:write (rabbit_headers_bindings, XR, write),
 
-    % Reorder results by x-match-order
+    % Reorder results by x-match-order because ordered_bag does not exists
     SortedValues = lists:sort (mnesia:read (rabbit_headers_bindings_keys, X)),
+    % can't use mnesia:clean_table because of nested transaction ?
     lists:foreach (fun(K) -> mnesia:delete (rabbit_headers_bindings_keys, K, write) end, mnesia:all_keys(rabbit_headers_bindings_keys)),
     lists:foreach (fun(OrderedBinding) -> mnesia:write (rabbit_headers_bindings_keys, OrderedBinding, write) end, SortedValues);
-
 add_binding(_Tx, _X, _B) -> ok.
 
 
