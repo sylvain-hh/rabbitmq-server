@@ -21,6 +21,8 @@
 -include("rabbit.hrl").
 -include("rabbit_framing.hrl").
 
+-define(REASONS, [ << "expired" >>, << "rejected" >>, << "maxlen" >> ]).
+
 %%----------------------------------------------------------------------------
 
 -type reason() :: 'expired' | 'rejected' | 'maxlen'.
@@ -112,14 +114,24 @@ group_by_queue_and_reason(Tables) ->
           end, {sets:new(), []}, Tables),
     Grouped.
 
+init_x_death_counts(Headers, _, []) ->
+	Headers;
+init_x_death_counts(Headers, Reason, [ Reason | Rest]) ->
+    H = rabbit_misc:set_table_value(Headers, <<"x-death-", Reason/bitstring, "-count" >>, long, 1),
+    init_x_death_counts(H, Reason, Rest);
+init_x_death_counts(Headers, _, [ Reason | Rest]) ->
+    H = rabbit_misc:set_table_value(Headers, <<"x-death-", Reason/bitstring, "-count" >>, long, 0),
+    init_x_death_counts(H, Reason, Rest).
+
 update_x_death_header(Info, Headers) ->
     Q = x_death_event_key(Info, <<"queue">>),
     R = x_death_event_key(Info, <<"reason">>),
     case rabbit_basic:header(<<"x-death">>, Headers) of
         undefined ->
+	    H = rabbit_misc:set_table_value(Headers, <<"x-death-", R/bitstring, "-count" >>, long, 1),
             rabbit_basic:prepend_table_header(
               <<"x-death">>,
-              [{<<"count">>, long, 1} | Info], Headers);
+              [{<<"count">>, long, 1} | Info], H);
         {<<"x-death">>, array, Tables} ->
             %% group existing x-death headers in case we have some from
             %% before rabbitmq-server#78
@@ -127,14 +139,15 @@ update_x_death_header(Info, Headers) ->
             {Matches, Others} = lists:partition(
                                   queue_and_reason_matcher(Q, R),
                                   GroupedTables),
-            Info1 = case Matches of
+            {Info1, NewCount} = case Matches of
                         [] ->
-                            [{<<"count">>, long, 1} | Info];
+                            { [{<<"count">>, long, 1} | Info], 1 };
                         [{table, M}] ->
                             increment_xdeath_event_count(M)
                     end,
+	    H = rabbit_misc:set_table_value(Headers, <<"x-death-", R/bitstring, "-count" >>, long, NewCount),
             rabbit_misc:set_table_value(
-              Headers, <<"x-death">>, array,
+              H, <<"x-death">>, array,
               [{table, rabbit_misc:sort_field_table(Info1)} | Others]);
         {<<"x-death">>, InvalidType, Header} ->
             rabbit_log:warning("Message has invalid x-death header (type: ~p)."
@@ -145,8 +158,9 @@ update_x_death_header(Info, Headers) ->
             %% a message and re-publish is, converting header values
             %% to strings, intentionally or not.
             %% See rabbitmq/rabbitmq-server#767 for details.
+	    H = init_x_death_counts(Headers, R, ?REASONS),
             rabbit_misc:set_table_value(
-              Headers, <<"x-death">>, array,
+              H, <<"x-death">>, array,
               [{table, [{<<"count">>, long, 1} | Info]}])
     end.
 
@@ -163,11 +177,11 @@ ensure_xdeath_event_count(Info, InitialVal) when InitialVal >= 1 ->
 increment_xdeath_event_count(Info) ->
     case x_death_event_key(Info, <<"count">>) of
         undefined ->
-            [{<<"count">>, long, 1} | Info];
+            { [{<<"count">>, long, 1} | Info], 1 };
         N ->
-            lists:keyreplace(
+            { lists:keyreplace(
               <<"count">>, 1, Info,
-              {<<"count">>, long, N + 1})
+              {<<"count">>, long, N + 1}), N + 1 }
     end.
 
 queue_and_reason_matcher(Q, R) ->
