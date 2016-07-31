@@ -57,19 +57,27 @@ route(X, #delivery{message = #basic_message{content = Content}}) ->
 get_destinations (_X, _Headers, [], Dests) -> Dests;
 get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R ], Dests) ->
     case ets:lookup(rabbit_headers_bindings, {X,BindingId}) of
-        %% It may happen that a binding is deleted in the meantime
+        %% It may happen that a binding is deleted in the meantime (?)
         [] -> get_destinations (X, Headers, R, Dests);
         %% Binding type is all
 % Do we have to care about last_nx_key ??
-        [#headers_bindings{destination=Dest, binding_type=all, last_nxkey=LNXK, cargs=TransformedArgs}] ->
+        [#headers_bindings{destination=Dest, binding_type=all, last_nxkey=LNXK, stop_on_match=SOM, cargs=TransformedArgs}] ->
             case (false =:= lists:member (Dest, Dests)) andalso headers_match_all(TransformedArgs, Headers, LNXK) of
-                true -> get_destinations (X, Headers, R, [Dest | Dests]);
+                true ->
+		    case SOM of
+			false -> get_destinations (X, Headers, R, [Dest | Dests]);
+			true -> [Dest | Dests]
+		    end;
                 _ -> get_destinations (X, Headers, R, Dests)
             end;
         %% Binding type is any
-        [#headers_bindings{destination=Dest, binding_type=any, last_nxkey=LNXK, cargs=TransformedArgs}] ->
+        [#headers_bindings{destination=Dest, binding_type=any, last_nxkey=LNXK, stop_on_match=SOM, cargs=TransformedArgs}] ->
             case (false =:= lists:member (Dest, Dests)) andalso headers_match_any(TransformedArgs, Headers, LNXK) of
-                true -> get_destinations (X, Headers, R, [Dest | Dests]);
+                true ->
+		    case SOM of
+			false -> get_destinations (X, Headers, R, [Dest | Dests]);
+			true -> [Dest | Dests]
+		    end;
                 _ -> get_destinations (X, Headers, R, Dests)
             end
     end.
@@ -201,51 +209,54 @@ flatten_bindings_args ([ {K, T, V} | R ], Result) ->
 	
 
 %% Delete x-* keys and ignore types excepted "void" used to match existence
-transform_binding_args(Args) -> transform_binding_args(Args, [], all, default_match_order(), nonx).
+transform_binding_args(Args) -> transform_binding_args(Args, [], all, default_match_order(), nonx, false).
 
-transform_binding_args([], Result, BT, Order, LNXK) -> { Result, BT, Order, LNXK };
-transform_binding_args([ {K, void, _V} | R ], Result, BT, Order, LNXK) ->
-    transform_binding_args (R, [ {K, ex,0} | Result], BT, Order, LNXK);
-transform_binding_args([ {<<"x-?ex ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK) ->
-    transform_binding_args (R, [ {K, ex,0} | Result], BT, Order, LNXK);
-transform_binding_args([ {<<"x-?nx ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK)
+transform_binding_args([], Result, BT, Order, LNXK, SOM) -> { Result, BT, Order, LNXK, SOM };
+transform_binding_args([ {K, void, _V} | R ], Result, BT, Order, LNXK, SOM) ->
+    transform_binding_args (R, [ {K, ex,0} | Result], BT, Order, LNXK, SOM);
+transform_binding_args([ {<<"x-?ex ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM) ->
+    transform_binding_args (R, [ {K, ex,0} | Result], BT, Order, LNXK, SOM);
+transform_binding_args([ {<<"x-?nx ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM)
     when K > LNXK ->
-    transform_binding_args (R, [ {K, nx,0} | Result], BT, Order, K);
-transform_binding_args([ {<<"x-?nx ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK) ->
-    transform_binding_args (R, [ {K, nx,0} | Result], BT, Order, LNXK);
-transform_binding_args([ {<<"x-?gt ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK) ->
-    transform_binding_args (R, [ {K, gt, V} | Result], BT, Order, LNXK);
-transform_binding_args([ {<<"x-?ge ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK) ->
-    transform_binding_args (R, [ {K, ge, V} | Result], BT, Order, LNXK);
-transform_binding_args([ {<<"x-?lt ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK) ->
-    transform_binding_args (R, [ {K, lt, V} | Result], BT, Order, LNXK);
-transform_binding_args([ {<<"x-?le ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK) ->
-    transform_binding_args (R, [ {K, le, V} | Result], BT, Order, LNXK);
-transform_binding_args([ {<<"x-?eq ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK) ->
-    transform_binding_args (R, [ {K, eq, V} | Result], BT, Order, LNXK);
-transform_binding_args([ {<<"x-?ne ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK) ->
-    transform_binding_args (R, [ {K, ne, V} | Result], BT, Order, LNXK);
-transform_binding_args([{<<"x-match">>, longstr, <<"any">>} | R], Result, _, Order, LNXK) ->
-    transform_binding_args (R, Result, any, Order, LNXK);
-transform_binding_args([{<<"x-match">>, longstr, <<"all">>} | R], Result, _, Order, LNXK) ->
-    transform_binding_args (R, Result, all, Order, LNXK);
-transform_binding_args([{<<"x-match-order">>, long, Order} | R], Result, BT, _, LNXK) ->
-    transform_binding_args (R, Result, BT, Order, LNXK);
-transform_binding_args([ {<<"x-", _/binary>>, _T, _V} | R ], Result, BT, Order, LNXK) ->
-    transform_binding_args (R, Result, BT, Order, LNXK);
-transform_binding_args([ {K, _T, V} | R ], Result, BT, Order, LNXK) ->
-    transform_binding_args (R, [ {K, eq, V} | Result], BT, Order, LNXK).
+    transform_binding_args (R, [ {K, nx,0} | Result], BT, Order, K, SOM);
+transform_binding_args([ {<<"x-?nx ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM) ->
+    transform_binding_args (R, [ {K, nx,0} | Result], BT, Order, LNXK, SOM);
+transform_binding_args([ {<<"x-?gt ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM) ->
+    transform_binding_args (R, [ {K, gt, V} | Result], BT, Order, LNXK, SOM);
+transform_binding_args([ {<<"x-?ge ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM) ->
+    transform_binding_args (R, [ {K, ge, V} | Result], BT, Order, LNXK, SOM);
+transform_binding_args([ {<<"x-?lt ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM) ->
+    transform_binding_args (R, [ {K, lt, V} | Result], BT, Order, LNXK, SOM);
+transform_binding_args([ {<<"x-?le ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM) ->
+    transform_binding_args (R, [ {K, le, V} | Result], BT, Order, LNXK, SOM);
+transform_binding_args([ {<<"x-?eq ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM) ->
+    transform_binding_args (R, [ {K, eq, V} | Result], BT, Order, LNXK, SOM);
+transform_binding_args([ {<<"x-?ne ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM) ->
+    transform_binding_args (R, [ {K, ne, V} | Result], BT, Order, LNXK, SOM);
+transform_binding_args([{<<"x-match">>, longstr, <<"any">>} | R], Result, _, Order, LNXK, SOM) ->
+    transform_binding_args (R, Result, any, Order, LNXK, SOM);
+transform_binding_args([{<<"x-match">>, longstr, <<"all">>} | R], Result, _, Order, LNXK, SOM) ->
+    transform_binding_args (R, Result, all, Order, LNXK, SOM);
+transform_binding_args([{<<"x-match-order">>, long, Order} | R], Result, BT, _, LNXK, SOM) ->
+    transform_binding_args (R, Result, BT, Order, LNXK, SOM);
+transform_binding_args([{<<"x-match-stoponmatch">>, boolean, true} | R], Result, BT, Order, LNXK, _) ->
+    transform_binding_args (R, Result, BT, Order, LNXK, true);
+transform_binding_args([ {<<"x-", _/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM) ->
+    transform_binding_args (R, Result, BT, Order, LNXK, SOM);
+transform_binding_args([ {K, _T, V} | R ], Result, BT, Order, LNXK, SOM) ->
+    transform_binding_args (R, [ {K, eq, V} | Result], BT, Order, LNXK, SOM).
 
 
 % Store the new "binding id" in rabbit_headers_bindings_keys whose key is X
 %  and store new transformed binding headers
 add_binding(transaction, X, BindingToAdd = #binding{destination = Dest, args = Args}) ->
+io:format ("EE : ~n~p~n", [rabbit_amqqueue:lookup([<< "q1" >>])]),
     BindingId = crypto:hash(md5,term_to_binary(BindingToAdd)),
     FArgs = flatten_bindings_args(Args),
-    { CleanArgs, BindingType, Order, LNXK } = transform_binding_args (FArgs),
+    { CleanArgs, BindingType, Order, LNXK, SOM } = transform_binding_args (FArgs),
     NewR = #headers_bindings_keys{exchange = X, binding_id = {Order,BindingId}},
     mnesia:write (rabbit_headers_bindings_keys, NewR, write),
-    XR = #headers_bindings{exch_bind = {X, {Order,BindingId}}, destination = Dest, binding_type = BindingType, last_nxkey = LNXK, cargs = rabbit_misc:sort_field_table(CleanArgs)},
+    XR = #headers_bindings{exch_bind = {X, {Order,BindingId}}, destination = Dest, binding_type = BindingType, last_nxkey = LNXK, stop_on_match = SOM, cargs = rabbit_misc:sort_field_table(CleanArgs)},
     mnesia:write (rabbit_headers_bindings, XR, write),
 
     % Reorder results by x-match-order because ordered_bag does not exists
