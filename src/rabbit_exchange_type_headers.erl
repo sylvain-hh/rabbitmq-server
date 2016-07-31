@@ -250,7 +250,6 @@ transform_binding_args([ {K, _T, V} | R ], Result, BT, Order, LNXK, SOM) ->
 % Store the new "binding id" in rabbit_headers_bindings_keys whose key is X
 %  and store new transformed binding headers
 add_binding(transaction, X, BindingToAdd = #binding{destination = Dest, args = Args}) ->
-io:format ("EE : ~n~p~n", [rabbit_amqqueue:lookup([<< "q1" >>])]),
     BindingId = crypto:hash(md5,term_to_binary(BindingToAdd)),
     FArgs = flatten_bindings_args(Args),
     { CleanArgs, BindingType, Order, LNXK, SOM } = transform_binding_args (FArgs),
