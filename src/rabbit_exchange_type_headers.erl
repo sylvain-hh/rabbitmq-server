@@ -239,7 +239,7 @@ transform_binding_args([{<<"x-match">>, longstr, <<"all">>} | R], Result, _, Ord
     transform_binding_args (R, Result, all, Order, LNXK, SOM);
 transform_binding_args([{<<"x-match-order">>, long, Order} | R], Result, BT, _, LNXK, SOM) ->
     transform_binding_args (R, Result, BT, Order, LNXK, SOM);
-transform_binding_args([{<<"x-match-stoponmatch">>, boolean, true} | R], Result, BT, Order, LNXK, _) ->
+transform_binding_args([{<<"x-match-stoponmatch">>, bool, true} | R], Result, BT, Order, LNXK, _) ->
     transform_binding_args (R, Result, BT, Order, LNXK, true);
 transform_binding_args([ {<<"x-", _/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM) ->
     transform_binding_args (R, Result, BT, Order, LNXK, SOM);
