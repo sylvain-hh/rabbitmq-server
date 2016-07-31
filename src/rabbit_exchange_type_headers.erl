@@ -26,6 +26,12 @@
          remove_bindings/3, assert_args_equivalence/2]).
 -export([info/1, info/2]).
 
+%%----------------------------------------------------------------------------
+
+-define(DEFAULT_GOTO_ORDER, undefined).
+
+%%----------------------------------------------------------------------------
+
 -rabbit_boot_step({?MODULE,
                    [{description, "exchange type headers"},
                     {mfa,         {rabbit_registry, register,
@@ -49,55 +55,72 @@ route(X, #delivery{message = #basic_message{content = Content}}) ->
         H         -> rabbit_misc:sort_field_table(H)
     end,
     BindingsIDs = ets:lookup(rabbit_headers_bindings_keys, X),
-    get_destinations (X, Headers, BindingsIDs, []).
+    get_destinations (X, Headers, BindingsIDs, ?DEFAULT_GOTO_ORDER, []).
 
 
 
 % Retreive destinations from bindings ids
-get_destinations (_X, _Headers, [], Dests) -> Dests;
-get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R ], Dests) ->
+get_destinations (_X, _Headers, [], _, Dests) -> Dests;
+get_destinations (X, Headers, [ #headers_bindings_keys{binding_id={CurrentOrder,_}} | R ], GotoOrder, Dests) when is_number(GotoOrder) andalso CurrentOrder < GotoOrder ->
+%%io:format("Skip : ~p~p~n", [CurrentOrder, GotoOrder]),
+    get_destinations (X, Headers, R, GotoOrder, Dests);
+get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R ], GotoOrder, Dests) ->
+%%io:format("Go next : ~p~p~n", [CurrentOrder, GotoOrder]),
     case ets:lookup(rabbit_headers_bindings, {X,BindingId}) of
         %% It may happen that a binding is deleted in the meantime (?)
-        [] -> get_destinations (X, Headers, R, Dests);
+        [] -> get_destinations (X, Headers, R, GotoOrder, Dests);
         %% Binding type is all
-% Do we have to care about last_nx_key ??
         [#headers_bindings{destination=Dest, binding_type=all, last_nxkey=LNXK, stop_on_match=SOM, gotos={GOT,GOF}, dontroute=DontRoute, cargs=TransformedArgs}] ->
-	    GOT, GOF,
+%%io:format("Cu GOT GOF : ~p~p~p~n", [CurrentOrder, GOT, GOF]),
 	    case { DontRoute, SOM, lists:member(Dest, Dests) } of
 		%% if destination is already matched, go next binding
-		{ _, _, true } -> get_destinations (X, Headers, R, Dests);
-		%% bad use : do not route but stop anyway, ending with already matched bindings
+		{ _, _, true } -> get_destinations (X, Headers, R, GotoOrder, Dests);
+		%% bad use : do not route and stop anyway, ending with already matched bindings
 		{ true, any, _ } -> [Dests];
 		_ -> case { headers_match_all(TransformedArgs, Headers, LNXK), DontRoute, SOM } of
 			 %% binding dont match and stop, ending with already matched bindings
 			 { false, _, any } -> Dests;
 			 { false, _, false } -> Dests;
 			 %% binding dont match, go next binding
-			 { false, _, _ } -> get_destinations (X, Headers, R, Dests);
+			 { false, _, _ } -> get_destinations (X, Headers, R, GOF, Dests);
 			 %% binding match and stop but dont route, ending with already matched bindings
 			 { _, true, any } -> Dests;
 			 { _, true, true } -> Dests;
 			 %% binding match but dont route, go next binding
-			 { _, true, _ } -> get_destinations (X, Headers, R, Dests);
+			 { _, true, _ } -> get_destinations (X, Headers, R, GOT, Dests);
 			 %% binding match and stop but route, ending with new dest
 			 { _, false, any } -> [Dest | Dests];
 		         { _, false, true } -> [Dest | Dests];
 			 %% binding match and route, go next binding with new dest
-			 { _, false, _ } -> get_destinations (X, Headers, R, [Dest | Dests])
+			 { _, false, _ } -> get_destinations (X, Headers, R, GOT, [Dest | Dests])
 		    end
 		end;
-
         %% Binding type is any
         [#headers_bindings{destination=Dest, binding_type=any, last_nxkey=LNXK, stop_on_match=SOM, gotos={GOT,GOF}, dontroute=DontRoute, cargs=TransformedArgs}] ->
-	    GOT, GOF, DontRoute,
-            case (false =:= lists:member (Dest, Dests)) andalso headers_match_any(TransformedArgs, Headers, LNXK) of
-                true ->
-		    case SOM of
-			false -> get_destinations (X, Headers, R, [Dest | Dests]);
-			true -> [Dest | Dests]
-		    end;
-                _ -> get_destinations (X, Headers, R, Dests)
-            end
+%%io:format("Cu GOT GOF : ~p~p~p~n", [CurrentOrder, GOT, GOF]),
+	    case { DontRoute, SOM, lists:member(Dest, Dests) } of
+		%% if destination is already matched, go next binding
+		{ _, _, true } -> get_destinations (X, Headers, R, GotoOrder, Dests);
+		%% bad use : do not route and stop anyway, ending with already matched bindings
+		{ true, any, _ } -> [Dests];
+		_ -> case { headers_match_any(TransformedArgs, Headers, LNXK), DontRoute, SOM } of
+			 %% binding dont match and stop, ending with already matched bindings
+			 { false, _, any } -> Dests;
+			 { false, _, false } -> Dests;
+			 %% binding dont match, go next binding
+			 { false, _, _ } -> get_destinations (X, Headers, R, GOF, Dests);
+			 %% binding match and stop but dont route, ending with already matched bindings
+			 { _, true, any } -> Dests;
+			 { _, true, true } -> Dests;
+			 %% binding match but dont route, go next binding
+			 { _, true, _ } -> get_destinations (X, Headers, R, GOT, Dests);
+			 %% binding match and stop but route, ending with new dest
+			 { _, false, any } -> [Dest | Dests];
+		         { _, false, true } -> [Dest | Dests];
+			 %% binding match and route, go next binding with new dest
+			 { _, false, _ } -> get_destinations (X, Headers, R, GOT, [Dest | Dests])
+		    end
+		end
     end.
 
 default_match_order() -> 1000.
@@ -227,7 +250,7 @@ flatten_bindings_args ([ {K, T, V} | R ], Result) ->
 	
 
 %% Delete x-* keys and ignore types excepted "void" used to match existence
-transform_binding_args(Args) -> transform_binding_args(Args, [], all, default_match_order(), nonx, undefined, undefined, undefined, false).
+transform_binding_args(Args) -> transform_binding_args(Args, [], all, default_match_order(), nonx, undefined, ?DEFAULT_GOTO_ORDER, ?DEFAULT_GOTO_ORDER, false).
 
 transform_binding_args([], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) -> { Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute };
 transform_binding_args([ {K, void, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
