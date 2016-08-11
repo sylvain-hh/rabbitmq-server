@@ -149,7 +149,7 @@ get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R
 		end
     end.
 
-default_match_order() -> 500.
+default_match_order() -> 2000.
 
 get_match_order(Args) ->
     case rabbit_misc:table_lookup(Args, <<"x-match-order">>) of
