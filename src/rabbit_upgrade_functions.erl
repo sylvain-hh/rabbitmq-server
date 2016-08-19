@@ -262,7 +262,7 @@ headers_bindings_keys() ->
 headers_bindings() ->
     create(rabbit_headers_bindings,
            [{record_name, headers_bindings},
-            {attributes, [exch_bind, destination, binding_type, last_nxkey, stop_on_match, gotos, dontroute, cargs]},
+            {attributes, [exch_bind, destinations, binding_type, optims, stop_on_match, gotos, options, cargs]},
             {type, ordered_set}] ).
 
 

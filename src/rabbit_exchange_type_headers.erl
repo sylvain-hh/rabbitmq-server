@@ -55,24 +55,21 @@ route(X, #delivery{message = #basic_message{content = Content}}) ->
         H         -> rabbit_misc:sort_field_table(H)
     end,
     BindingsIDs = ets:lookup(rabbit_headers_bindings_keys, X),
-%io:format ("~p ", [length(BindingsIDs)]),
-    get_destinations (X, Headers, BindingsIDs, ?DEFAULT_GOTO_ORDER, []).
+    DDD = get_destinations (X, Headers, BindingsIDs, ?DEFAULT_GOTO_ORDER, []),
+    DDD.
 
 
 
 % Retreive destinations from bindings ids
 get_destinations (_X, _Headers, [], _, Dests) -> Dests;
 get_destinations (X, Headers, [ #headers_bindings_keys{binding_id={CurrentOrder,_}} | R ], GotoOrder, Dests) when is_number(GotoOrder) andalso CurrentOrder < GotoOrder ->
-%%io:format("Skip : ~p~p~n", [CurrentOrder, GotoOrder]),
     get_destinations (X, Headers, R, GotoOrder, Dests);
 get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R ], GotoOrder, Dests) ->
-%%io:format("Go next : ~p~p~n", [CurrentOrder, GotoOrder]),
     case ets:lookup(rabbit_headers_bindings, {X,BindingId}) of
         %% It may happen that a binding is deleted in the meantime (?)
         [] -> get_destinations (X, Headers, R, GotoOrder, Dests);
         %% Binding type is all
-        [#headers_bindings{destination=Dest, binding_type=all, last_nxkey=LNXK, stop_on_match=SOM, gotos={GOT,GOF}, dontroute=DontRoute, cargs=TransformedArgs}] ->
-%%io:format("Cu GOT GOF : ~p~p~p~n", [CurrentOrder, GOT, GOF]),
+        [#headers_bindings{destinations={Dest,[DATS,DAFS,DDTS,DDFS]}, binding_type=all, optims={LNXK,_}, stop_on_match=SOM, gotos={GOT,GOF}, options={DontRoute,_}, cargs=TransformedArgs}] ->
 	    case { DontRoute, SOM, lists:member(Dest, Dests) } of
 		%% if destination is already matched, go next binding
 		{ _, _, true } -> get_destinations (X, Headers, R, GotoOrder, Dests);
@@ -80,24 +77,23 @@ get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R
 		{ true, any, _ } -> [Dests];
 		_ -> case { headers_match_all(TransformedArgs, Headers, LNXK), DontRoute, SOM } of
 			 %% binding dont match and stop, ending with already matched bindings
-			 { false, _, any } -> Dests;
-			 { false, _, false } -> Dests;
+			 { false, _, any } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
+			 { false, _, false } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
 			 %% binding dont match, go next binding
-			 { false, _, _ } -> get_destinations (X, Headers, R, GOF, Dests);
+			 { false, _, _ } -> get_destinations (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS));
 			 %% binding match and stop but dont route, ending with already matched bindings
-			 { _, true, any } -> Dests;
-			 { _, true, true } -> Dests;
+			 { _, true, any } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
+			 { _, true, true } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
 			 %% binding match but dont route, go next binding
-			 { _, true, _ } -> get_destinations (X, Headers, R, GOT, Dests);
+			 { _, true, _ } -> get_destinations (X, Headers, R, GOT, lists:subtract(lists:append([Dests, DATS]),DDTS));
 			 %% binding match and stop but route, ending with new dest
-			 { _, false, any } -> [Dest | Dests];
-		         { _, false, true } -> [Dest | Dests];
+			 { _, false, any } -> lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS);
+		         { _, false, true } -> lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS);
 			 %% binding match and route, go next binding with new dest
-			 { _, false, _ } -> get_destinations (X, Headers, R, GOT, [Dest | Dests])
+			 { _, false, _ } -> get_destinations (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS))
 		    end
 		end;
-        [#headers_bindings{destination=Dest, binding_type=one, stop_on_match=SOM, gotos={GOT,GOF}, dontroute=DontRoute, cargs=TransformedArgs}] ->
-%%io:format("Cu GOT GOF : ~p~p~p~n", [CurrentOrder, GOT, GOF]),
+        [#headers_bindings{destinations={Dest,_}, binding_type=one, stop_on_match=SOM, gotos={GOT,GOF}, options={DontRoute,_}, cargs=TransformedArgs}] ->
 	    case { DontRoute, SOM, lists:member(Dest, Dests) } of
 		%% if destination is already matched, go next binding
 		{ _, _, true } -> get_destinations (X, Headers, R, GotoOrder, Dests);
@@ -122,8 +118,7 @@ get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R
 		    end
 		end;
         %% Binding type is any
-        [#headers_bindings{destination=Dest, binding_type=any, last_nxkey=LNXK, stop_on_match=SOM, gotos={GOT,GOF}, dontroute=DontRoute, cargs=TransformedArgs}] ->
-%%io:format("Cu GOT GOF : ~p~p~p~n", [CurrentOrder, GOT, GOF]),
+        [#headers_bindings{destinations={Dest,_}, binding_type=any, optims={LNXK,_}, stop_on_match=SOM, gotos={GOT,GOF}, options={DontRoute,_}, cargs=TransformedArgs}] ->
 	    case { DontRoute, SOM, lists:member(Dest, Dests) } of
 		%% if destination is already matched, go next binding
 		{ _, _, true } -> get_destinations (X, Headers, R, GotoOrder, Dests);
@@ -350,84 +345,136 @@ flatten_bindings_args ([ {K, T, V} | R ], Result) ->
 	flatten_bindings_args (R, [ {K, T, V} | Result ]).
 	
 
+%% DATS : Destinations to Add on True Set
+%% DAFS : Destinations to Add on False Set
+%% DDTS : Destinations to Del on True Set
+%% DDFS : Destinations to Del on False Set
+transform_binding_args_dests(VHost, Args) ->
+    [DATS,DAFS,DDTS,DDFS] = transform_binding_args_dests(VHost, Args, sets:new(), sets:new(), sets:new(), sets:new()),
+    [ sets:to_list(DATS), sets:to_list(DAFS), sets:to_list(DDTS), sets:to_list(DDFS) ].
+
+transform_binding_args_dests(_, [], DATS,DAFS,DDTS,DDFS) -> [ DATS,DAFS,DDTS,DDFS ];
+transform_binding_args_dests(VHost, [ {<<"x-match-addq">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
+    D = rabbit_misc:r(VHost, queue, V),
+    transform_binding_args_dests (VHost, R, sets:add_element(D,DATS), sets:add_element(D,DAFS), DDTS,DDFS);
+transform_binding_args_dests(VHost, [ {<<"x-match-adde">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
+    D = rabbit_misc:r(VHost, exchange, V),
+    transform_binding_args_dests (VHost, R, sets:add_element(D,DATS), sets:add_element(D,DAFS), DDTS,DDFS);
+transform_binding_args_dests(VHost, [ {<<"x-match-addq-ontrue">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
+    D = rabbit_misc:r(VHost, queue, V),
+    transform_binding_args_dests (VHost, R, sets:add_element(D,DATS), DAFS, DDTS,DDFS);
+transform_binding_args_dests(VHost, [ {<<"x-match-adde-ontrue">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
+    D = rabbit_misc:r(VHost, exchange, V),
+    transform_binding_args_dests (VHost, R, sets:add_element(D,DATS), DAFS, DDTS,DDFS);
+transform_binding_args_dests(VHost, [ {<<"x-match-addq-onfalse">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
+    D = rabbit_misc:r(VHost, queue, V),
+    transform_binding_args_dests (VHost, R, DATS, sets:add_element(D,DAFS), DDTS,DDFS);
+transform_binding_args_dests(VHost, [ {<<"x-match-adde-onfalse">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
+    D = rabbit_misc:r(VHost, exchange, V),
+    transform_binding_args_dests (VHost, R, DATS, sets:add_element(D,DAFS), DDTS,DDFS);
+transform_binding_args_dests(VHost, [ {<<"x-match-delq">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
+    D = rabbit_misc:r(VHost, queue, V),
+    transform_binding_args_dests (VHost, R, DATS,DAFS, sets:add_element(D,DDTS), sets:add_element(D,DDFS));
+transform_binding_args_dests(VHost, [ {<<"x-match-dele">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
+    D = rabbit_misc:r(VHost, exchange, V),
+    transform_binding_args_dests (VHost, R, DATS,DAFS, sets:add_element(D,DDTS), sets:add_element(D,DDFS));
+transform_binding_args_dests(VHost, [ {<<"x-match-delq-ontrue">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
+    D = rabbit_misc:r(VHost, queue, V),
+    transform_binding_args_dests (VHost, R, DATS,DAFS, sets:add_element(D,DDTS), DDFS);
+transform_binding_args_dests(VHost, [ {<<"x-match-dele-ontrue">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
+    D = rabbit_misc:r(VHost, exchange, V),
+    transform_binding_args_dests (VHost, R, DATS,DAFS, sets:add_element(D,DDTS), DDFS);
+transform_binding_args_dests(VHost, [ {<<"x-match-delq-onfalse">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
+    D = rabbit_misc:r(VHost, queue, V),
+    transform_binding_args_dests (VHost, R, DATS,DAFS, DDTS, sets:add_element(D,DDFS));
+transform_binding_args_dests(VHost, [ {<<"x-match-dele-onfalse">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
+    D = rabbit_misc:r(VHost, exchange, V),
+    transform_binding_args_dests (VHost, R, DATS,DAFS, DDTS, sets:add_element(D,DDFS));
+
+transform_binding_args_dests(VHost, [ _ | R ], DATS,DAFS,DDTS,DDFS) ->
+    transform_binding_args_dests (VHost, R, DATS,DAFS,DDTS,DDFS).
+
+
 %% Delete x-* keys and ignore types excepted "void" used to match existence
-transform_binding_args(Args) -> transform_binding_args(Args, [], all, default_match_order(), nonx, undefined, ?DEFAULT_GOTO_ORDER, ?DEFAULT_GOTO_ORDER, false).
+transform_binding_args(VHost, Args) -> transform_binding_args(VHost, Args, [], all, default_match_order(), nonx, undefined, ?DEFAULT_GOTO_ORDER, ?DEFAULT_GOTO_ORDER, false).
 
-transform_binding_args([], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) -> { Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute };
+transform_binding_args(_, [], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) -> { Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute };
 
-transform_binding_args([ {K, void, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, [ {K, ex,0} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args([ {<<"x-?ex ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, [ {K, ex,0} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [ {K, void, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, [ {K, ex,0} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [ {<<"x-?ex ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, [ {K, ex,0} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
 
-transform_binding_args([ {<<"x-?nx ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute)
+transform_binding_args(VHost, [ {<<"x-?nx ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute)
     when K > LNXK ->
-    transform_binding_args (R, [ {K, nx,0} | Result], BT, Order, K, SOM, GOT, GOF, DontRoute);
-transform_binding_args([ {<<"x-?nx ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, [ {K, nx,0} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
+    transform_binding_args (VHost, R, [ {K, nx,0} | Result], BT, Order, K, SOM, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [ {<<"x-?nx ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, [ {K, nx,0} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
 
-transform_binding_args([ {<<"x-?gt ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, [ {K, gt, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args([ {<<"x-?ge ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, [ {K, ge, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args([ {<<"x-?lt ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, [ {K, lt, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args([ {<<"x-?le ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, [ {K, le, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args([ {<<"x-?eq ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, [ {K, eq, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args([ {<<"x-?ne ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, [ {K, ne, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [ {<<"x-?gt ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, [ {K, gt, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [ {<<"x-?ge ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, [ {K, ge, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [ {<<"x-?lt ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, [ {K, lt, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [ {<<"x-?le ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, [ {K, le, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [ {<<"x-?eq ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, [ {K, eq, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [ {<<"x-?ne ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, [ {K, ne, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
 
-transform_binding_args([{<<"x-match">>, longstr, <<"any">>} | R], Result, _, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, Result, any, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args([{<<"x-match">>, longstr, <<"all">>} | R], Result, _, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, Result, all, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args([{<<"x-match">>, longstr, <<"one">>} | R], Result, _, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, Result, one, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [{<<"x-match">>, longstr, <<"any">>} | R], Result, _, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, Result, any, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [{<<"x-match">>, longstr, <<"all">>} | R], Result, _, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, Result, all, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [{<<"x-match">>, longstr, <<"one">>} | R], Result, _, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, Result, one, Order, LNXK, SOM, GOT, GOF, DontRoute);
 
-transform_binding_args([{<<"x-match-order">>, long, Order} | R], Result, BT, _, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [{<<"x-match-order">>, long, Order} | R], Result, BT, _, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
 
-transform_binding_args([{<<"x-match-goto">>, long, N} | R], Result, BT, Order, LNXK, SOM, _, _, DontRoute) ->
-    transform_binding_args (R, Result, BT, Order, LNXK, SOM, N, N, DontRoute);
-transform_binding_args([{<<"x-match-goto-true">>, long, N} | R], Result, BT, Order, LNXK, SOM, _, GOF, DontRoute) ->
-    transform_binding_args (R, Result, BT, Order, LNXK, SOM, N, GOF, DontRoute);
-transform_binding_args([{<<"x-match-goto-false">>, long, N} | R], Result, BT, Order, LNXK, SOM, GOT, _, DontRoute) ->
-    transform_binding_args (R, Result, BT, Order, LNXK, SOM, GOT, N, DontRoute);
+transform_binding_args(VHost, [{<<"x-match-goto">>, long, N} | R], Result, BT, Order, LNXK, SOM, _, _, DontRoute) ->
+    transform_binding_args (VHost, R, Result, BT, Order, LNXK, SOM, N, N, DontRoute);
+transform_binding_args(VHost, [{<<"x-match-goto-true">>, long, N} | R], Result, BT, Order, LNXK, SOM, _, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, Result, BT, Order, LNXK, SOM, N, GOF, DontRoute);
+transform_binding_args(VHost, [{<<"x-match-goto-false">>, long, N} | R], Result, BT, Order, LNXK, SOM, GOT, _, DontRoute) ->
+    transform_binding_args (VHost, R, Result, BT, Order, LNXK, SOM, GOT, N, DontRoute);
 
-transform_binding_args([{<<"x-match-stop">>, bool, true} | R], Result, BT, Order, LNXK, _, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, Result, BT, Order, LNXK, any, GOT, GOF, DontRoute);
-transform_binding_args([{<<"x-match-stop-true">>, bool, true} | R], Result, BT, Order, LNXK, _, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, Result, BT, Order, LNXK, true, GOT, GOF, DontRoute);
-transform_binding_args([{<<"x-match-stop-false">>, bool, true} | R], Result, BT, Order, LNXK, _, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, Result, BT, Order, LNXK, false, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [{<<"x-match-stop">>, bool, true} | R], Result, BT, Order, LNXK, _, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, Result, BT, Order, LNXK, any, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [{<<"x-match-stop-true">>, bool, true} | R], Result, BT, Order, LNXK, _, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, Result, BT, Order, LNXK, true, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [{<<"x-match-stop-false">>, bool, true} | R], Result, BT, Order, LNXK, _, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, Result, BT, Order, LNXK, false, GOT, GOF, DontRoute);
 
-transform_binding_args([{<<"x-match-dontroute">>, bool, true} | R], Result, BT, Order, LNXK, SOM, GOT, GOF, _) ->
-    transform_binding_args (R, Result, BT, Order, LNXK, SOM, GOT, GOF, true);
+transform_binding_args(VHost, [{<<"x-match-dontroute">>, bool, true} | R], Result, BT, Order, LNXK, SOM, GOT, GOF, _) ->
+    transform_binding_args (VHost, R, Result, BT, Order, LNXK, SOM, GOT, GOF, true);
 
-transform_binding_args([ {<<"x-", _/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args([ {K, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (R, [ {K, eq, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute).
+transform_binding_args(VHost, [ {<<"x-", _/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args(VHost, [ {K, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (VHost, R, [ {K, eq, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute).
 
 
 % Store the new "binding id" in rabbit_headers_bindings_keys whose key is X
 %  and store new transformed binding headers
-add_binding(transaction, X, BindingToAdd = #binding{destination = Dest, args = Args}) ->
+%add_binding(transaction, X = #exchange{name = #resource{virtual_host = VHost}, _='_'}, BindingToAdd = #binding{destination = Dest, args = Args}) ->
+add_binding(transaction, #exchange{name = #resource{virtual_host = VHost}} = X, BindingToAdd = #binding{destination = Dest, args = Args}) ->
     BindingId = crypto:hash(md5,term_to_binary(BindingToAdd)),
     FArgs = flatten_bindings_args(Args),
-    { CleanArgs, BindingType, Order, LNXK, SOM, GOT, GOF, DontRoute } = transform_binding_args (FArgs),
+    DestsOptions = transform_binding_args_dests(VHost, FArgs),
+    { CleanArgs, BindingType, Order, LNXK, SOM, GOT, GOF, DontRoute } = transform_binding_args (VHost, FArgs),
     NewR = #headers_bindings_keys{exchange = X, binding_id = {Order,BindingId}},
-    mnesia:write (rabbit_headers_bindings_keys, NewR, write),
-    XR = #headers_bindings{exch_bind = {X, {Order,BindingId}}, destination = Dest, binding_type = BindingType, last_nxkey = LNXK, stop_on_match = SOM, gotos={GOT,GOF}, dontroute=DontRoute, cargs = rabbit_misc:sort_field_table(CleanArgs)},
-    mnesia:write (rabbit_headers_bindings, XR, write),
+    ok = mnesia:write (rabbit_headers_bindings_keys, NewR, write),
+    XR = #headers_bindings{exch_bind = {X, {Order,BindingId}}, destinations = {Dest,DestsOptions}, binding_type = BindingType, optims = {LNXK,0}, stop_on_match = SOM, gotos={GOT,GOF}, options={DontRoute,0}, cargs = rabbit_misc:sort_field_table(CleanArgs)},
+    ok = mnesia:write (rabbit_headers_bindings, XR, write),
 
-    % Reorder results by x-match-order because ordered_bag does not exists
-    SortedValues = lists:sort (mnesia:read (rabbit_headers_bindings_keys, X)),
-    % can't use mnesia:clean_table because of nested transaction ?
-    lists:foreach (fun(K) -> mnesia:delete (rabbit_headers_bindings_keys, K, write) end, mnesia:all_keys(rabbit_headers_bindings_keys)),
-    lists:foreach (fun(OrderedBinding) -> mnesia:write (rabbit_headers_bindings_keys, OrderedBinding, write) end, SortedValues);
+    %% Because ordered_bag does not exist, we need to reorder bindings
+    %%  so that we don't need to sort in route/2
+    OrderedBindings = lists:sort (mnesia:read (rabbit_headers_bindings_keys, X)),
+    lists:foreach (fun(R) -> mnesia:delete_object (rabbit_headers_bindings_keys, R, write) end, OrderedBindings),
+    lists:foreach (fun(R) -> mnesia:write (rabbit_headers_bindings_keys, R, write) end, OrderedBindings);
 add_binding(_Tx, _X, _B) -> ok.
 
 
