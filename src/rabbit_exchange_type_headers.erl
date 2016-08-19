@@ -69,13 +69,13 @@ get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R
         %% It may happen that a binding is deleted in the meantime (?)
         [] -> get_destinations (X, Headers, R, GotoOrder, Dests);
         %% Binding type is all
-        [#headers_bindings{destinations={Dest,[DATS,DAFS,DDTS,DDFS]}, binding_type=all, optims={LNXK,_}, stop_on_match=SOM, gotos={GOT,GOF}, options={DontRoute,_}, cargs=TransformedArgs}] ->
+        [#headers_bindings{destinations={Dest,[DATS,DAFS,DDTS,DDFS]}, binding_type=all, stop_on_match=SOM, gotos={GOT,GOF}, options={DontRoute,_}, cargs=TransformedArgs}] ->
 	    case { DontRoute, SOM, lists:member(Dest, Dests) } of
 		%% if destination is already matched, go next binding
 		{ _, _, true } -> get_destinations (X, Headers, R, GotoOrder, Dests);
 		%% bad use : do not route and stop anyway, ending with already matched bindings
 		{ true, any, _ } -> [Dests];
-		_ -> case { headers_match_all(TransformedArgs, Headers, LNXK), DontRoute, SOM } of
+		_ -> case { headers_match_all(TransformedArgs, Headers), DontRoute, SOM } of
 			 %% binding dont match and stop, ending with already matched bindings
 			 { false, _, any } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
 			 { false, _, false } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
@@ -118,13 +118,13 @@ get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R
 		    end
 		end;
         %% Binding type is any
-        [#headers_bindings{destinations={Dest,_}, binding_type=any, optims={LNXK,_}, stop_on_match=SOM, gotos={GOT,GOF}, options={DontRoute,_}, cargs=TransformedArgs}] ->
+        [#headers_bindings{destinations={Dest,_}, binding_type=any, stop_on_match=SOM, gotos={GOT,GOF}, options={DontRoute,_}, cargs=TransformedArgs}] ->
 	    case { DontRoute, SOM, lists:member(Dest, Dests) } of
 		%% if destination is already matched, go next binding
 		{ _, _, true } -> get_destinations (X, Headers, R, GotoOrder, Dests);
 		%% bad use : do not route and stop anyway, ending with already matched bindings
 		{ true, any, _ } -> [Dests];
-		_ -> case { headers_match_any(TransformedArgs, Headers, LNXK), DontRoute, SOM } of
+		_ -> case { headers_match_any(TransformedArgs, Headers), DontRoute, SOM } of
 			 %% binding dont match and stop, ending with already matched bindings
 			 { false, _, any } -> Dests;
 			 { false, _, false } -> Dests;
@@ -192,138 +192,128 @@ validate_binding(Args, xmatchdontroute) ->
 %% !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 % No more binding header to match with, return false
-headers_match_any([], _, _) -> false;
-% No more data and no nx op, return false
-headers_match_any([_], [], nonx) -> false;
-% Last nx op is after (or is) current key, return true
-headers_match_any([{PK, _, _} | _], [], LNXK)
-    when PK =< LNXK -> true;
-% There won't be other nx op in bindings, return false
-headers_match_any([{PK, _, _} | _], [], LNXK)
-    when PK > LNXK -> false;
-
+headers_match_any([], _) -> false;
+% On no data left, only nx operator may return true..
+headers_match_any([{_, nx, _} | _], []) -> true;
+headers_match_any([_ | BNext], []) ->
+    headers_match_any(BNext, []);
 % Go next data to match current binding key
-headers_match_any(P = [{PK, _, _} | _], [{DK, _, _} | DRest], LNXK)
-    when PK > DK -> headers_match_any(P, DRest, LNXK);
+headers_match_any(BCur = [{BK, _, _} | _], [{DK, _, _} | DNext])
+    when BK > DK -> headers_match_any(BCur, DNext);
 % Current binding key must not exist in data, return true
-headers_match_any([{PK, nx,_} | _], [{DK, _, _} | _], _)
-    when PK < DK -> true;
+headers_match_any([{BK, nx, _} | _], [{DK, _, _} | _])
+    when BK < DK -> true;
 % Current binding key does not exist in data, go next binding key
-headers_match_any([{PK, _, _} | PRest], D = [{DK, _, _} | _], LNXK)
-    when PK < DK -> headers_match_any(PRest, D, LNXK);
+headers_match_any([{BK, _, _} | BNext], DCur = [{DK, _, _} | _])
+    when BK < DK -> headers_match_any(BNext, DCur);
 % ---------------------
-% From here, PK == DK :
+% From here, BK == DK :
 % ---------------------
-headers_match_any([{_, eq, PV} | _], [{_, _, DV} | _], _) when DV == PV -> true;
-headers_match_any([{_, ex,_} | _], _, _) -> true;
-headers_match_any([{_, ne, PV} | _], [{_, _, DV} | _], _) when DV /= PV -> true;
-headers_match_any([{_, gt, PV} | _], [{_, _, DV} | _], _) when DV > PV -> true;
-headers_match_any([{_, ge, PV} | _], [{_, _, DV} | _], _) when DV >= PV -> true;
-headers_match_any([{_, lt, PV} | _], [{_, _, DV} | _], _) when DV < PV -> true;
-headers_match_any([{_, le, PV} | _], [{_, _, DV} | _], _) when DV =< PV -> true;
+headers_match_any([{_, eq, BV} | _], [{_, _, DV} | _]) when DV == BV -> true;
+headers_match_any([{_, ex, _} | _], _) -> true;
+headers_match_any([{_, ne, BV} | _], [{_, _, DV} | _]) when DV /= BV -> true;
+headers_match_any([{_, gt, BV} | _], [{_, _, DV} | _]) when DV > BV -> true;
+headers_match_any([{_, ge, BV} | _], [{_, _, DV} | _]) when DV >= BV -> true;
+headers_match_any([{_, lt, BV} | _], [{_, _, DV} | _]) when DV < BV -> true;
+headers_match_any([{_, le, BV} | _], [{_, _, DV} | _]) when DV =< BV -> true;
 % No match, go next binding
-headers_match_any([_ | PRest], D, LNXK) ->
-    headers_match_any(PRest, D, LNXK).
+headers_match_any([_ | BNext], DCur) ->
+    headers_match_any(BNext, DCur).
 
 
+% Initial call set Result to false; that Result must switch once to true
+%  and must stay to be true. A true match with Result to true does match false.
 headers_match_one([], _, Result) -> Result;
 % No more data; nx is the only op we must care
-headers_match_one([{_, nx,_} | _], [], true) -> false;
-headers_match_one([{_, nx,_} | PRest], [], false) ->
-    headers_match_one(PRest, [], true);
-% No more data; go next binding
-headers_match_one([_ | PRest], [], Result) ->
-    headers_match_one(PRest, [], Result);
+headers_match_one([{_, nx, _} | _], [], true) -> false;
+headers_match_one([{_, nx, _} | BNext], [], false) ->
+    headers_match_one(BNext, [], true);
+headers_match_one([_ | BNext], [], Result) ->
+    headers_match_one(BNext, [], Result);
 % Go next data to match current binding key
-headers_match_one(P = [{PK, _, _} | _], [{DK, _, _} | DRest], Result)
-    when PK > DK -> headers_match_one(P, DRest, Result);
+headers_match_one(BCur = [{BK, _, _} | _], [{DK, _, _} | DNext], Result)
+    when BK > DK -> headers_match_one(BCur, DNext, Result);
 % Current binding key must not exist in data
-headers_match_one([{PK, nx,_} | _], [{DK, _, _} | _], true)
-    when PK < DK -> false;
-headers_match_one([{PK, nx,_} | PRest], D = [{DK, _, _} | _], false)
-    when PK < DK -> headers_match_one(PRest, D, true);
+headers_match_one([{BK, nx, _} | _], [{DK, _, _} | _], true)
+    when BK < DK -> false;
+headers_match_one([{BK, nx, _} | BNext], DCur = [{DK, _, _} | _], false)
+    when BK < DK -> headers_match_one(BNext, DCur, true);
 % Current binding key does not exist in data, go next binding key
-headers_match_one([{PK, _, _} | PRest], D = [{DK, _, _} | _], Result)
-    when PK < DK -> headers_match_one(PRest, D, Result);
+headers_match_one([{BK, _, _} | BNext], DCur = [{DK, _, _} | _], Result)
+    when BK < DK -> headers_match_one(BNext, DCur, Result);
 % ---------------------
-% From here, PK == DK :
+% From here, BK == DK :
 % ---------------------
-headers_match_one([{_, eq, PV} | _], [{_, _, DV} | _], true) when DV == PV -> false;
-headers_match_one([{_, eq, PV} | PRest], [{_, _, DV} | DRest], false) when DV == PV ->
-     headers_match_one(PRest, DRest, true);
-headers_match_one([{_, ex,_} | _], _, true) -> false;
-headers_match_one([{_, ex,_} | PRest], D, false) ->
-    headers_match_one(PRest, D, true);
-headers_match_one([{_, ne, PV} | _], [{_, _, DV} | _], true) when DV /= PV -> false;
-headers_match_one([{_, ne, PV} | PRest], D = [{_, _, DV} | _], false) when DV /= PV ->
-    headers_match_one(PRest, D, true);
-headers_match_one([{_, gt, PV} | _], [{_, _, DV} | _], true) when DV > PV -> false;
-headers_match_one([{_, gt, PV} | PRest], D = [{_, _, DV} | _], false) when DV > PV ->
-    headers_match_one(PRest, D, true);
-headers_match_one([{_, ge, PV} | _], [{_, _, DV} | _], true) when DV >= PV -> true;
-headers_match_one([{_, ge, PV} | PRest], D = [{_, _, DV} | _], false) when DV >= PV ->
-    headers_match_one(PRest, D, true);
-headers_match_one([{_, lt, PV} | _], [{_, _, DV} | _], true) when DV < PV -> true;
-headers_match_one([{_, lt, PV} | PRest], D = [{_, _, DV} | _], false) when DV < PV ->
-    headers_match_one(PRest, D, true);
-headers_match_one([{_, le, PV} | _], [{_, _, DV} | _], true) when DV =< PV -> true;
-headers_match_one([{_, le, PV} | PRest], D = [{_, _, DV} | _], false) when DV =< PV ->
-    headers_match_one(PRest, D, true);
+headers_match_one([{_, eq, BV} | _], [{_, _, DV} | _], true) when DV == BV -> false;
+headers_match_one([{_, eq, BV} | BNext], DCur = [{_, _, DV} | _], false) when DV == BV ->
+     headers_match_one(BNext, DCur, true);
+headers_match_one([{_, ex, _} | _], _, true) -> false;
+headers_match_one([{_, ex, _} | BNext], [_ | DNext], false) ->
+    headers_match_one(BNext, DNext, true);
+headers_match_one([{_, ne, BV} | _], [{_, _, DV} | _], true) when DV /= BV -> false;
+headers_match_one([{_, ne, BV} | BNext], DCur = [{_, _, DV} | _], false) when DV /= BV ->
+    headers_match_one(BNext, DCur, true);
+headers_match_one([{_, gt, BV} | _], [{_, _, DV} | _], true) when DV > BV -> false;
+headers_match_one([{_, gt, BV} | BNext], DCur = [{_, _, DV} | _], false) when DV > BV ->
+    headers_match_one(BNext, DCur, true);
+headers_match_one([{_, ge, BV} | _], [{_, _, DV} | _], true) when DV >= BV -> true;
+headers_match_one([{_, ge, BV} | BNext], DCur = [{_, _, DV} | _], false) when DV >= BV ->
+    headers_match_one(BNext, DCur, true);
+headers_match_one([{_, lt, BV} | _], [{_, _, DV} | _], true) when DV < BV -> true;
+headers_match_one([{_, lt, BV} | BNext], DCur = [{_, _, DV} | _], false) when DV < BV ->
+    headers_match_one(BNext, DCur, true);
+headers_match_one([{_, le, BV} | _], [{_, _, DV} | _], true) when DV =< BV -> true;
+headers_match_one([{_, le, BV} | BNext], DCur = [{_, _, DV} | _], false) when DV =< BV ->
+    headers_match_one(BNext, DCur, true);
 % No match, go next binding
-headers_match_one([_ | PRest], D, Result) ->
-    headers_match_one(PRest, D, Result).
+headers_match_one([_ | BNext], DCur, Result) ->
+    headers_match_one(BNext, DCur, Result).
 
 
 
 
 
 % No more binding header to match with, return true
-headers_match_all([], _, _) -> true;
-% No more data and no nx op, return false
-headers_match_all([_], [], nonx) -> false;
+headers_match_all([], _) -> true;
 % Purge nx op on no data as all these are true
-headers_match_all([{_, nx, _} | PRest], [], NX) ->
-    headers_match_all(PRest, [], NX);
-% No more data with some op other than nx, return false
-headers_match_all([_], [], _) -> false;
+headers_match_all([{_, nx, _} | BNext], []) ->
+    headers_match_all(BNext, []);
+headers_match_all(_, []) -> false;
 
 % Current data key is not in binding, go next data
-headers_match_all(P = [{PK, _, _} | _], [{DK, _, _} | DRest], NX)
-    when PK > DK -> headers_match_all(P, DRest, NX);
+headers_match_all(BCur = [{BK, _, _} | _], [{DK, _, _} | DNext])
+    when BK > DK -> headers_match_all(BCur, DNext);
 % Current binding key must not exist in data, go next binding
-headers_match_all([{PK, nx, _} | PRest], D = [{DK, _, _} | _], NX)
-    when PK < DK -> headers_match_all(PRest, D, NX);
+headers_match_all([{BK, nx, _} | BNext], DCur = [{DK, _, _} | _])
+    when BK < DK -> headers_match_all(BNext, DCur);
 % Current binding key does not exist in data, return false
-headers_match_all([{PK, _, _} | _], [{DK, _, _} | _], _)
-    when PK < DK -> false;
+headers_match_all([{BK, _, _} | _], [{DK, _, _} | _])
+    when BK < DK -> false;
 % ---------------------
-% From here, PK == DK :
+% From here, BK == DK :
 % ---------------------
-% WARNS : do not "x-?ex n" AND "x-?* n" it does not work !
-% If key must exists go next
-headers_match_all([{_, ex,_} | PRest], [ _ | DRest], NX) ->
-    headers_match_all(PRest, DRest, NX);
-% else if values must match and it matches then go next..
-headers_match_all([{_, eq, PV} | PRest], [{_, _, DV} | DRest], NX)
-    when PV == DV -> headers_match_all(PRest, DRest, NX);
-headers_match_all([{_, eq, _} | _], _, _) -> false;
+headers_match_all([{_, eq, PV} | BNext], [{_, _, DV} | DNext])
+    when PV == DV -> headers_match_all(BNext, DNext);
+headers_match_all([{_, eq, _} | _], _) -> false;
 % Key must not exist, return false
-headers_match_all([{_, nx,_} | _], _, _) -> false;
-headers_match_all([{_, ne, PV} | PRest], D = [{_, _, DV} | _], NX)
-    when PV /= DV -> headers_match_all(PRest, D, NX);
-headers_match_all([{_, ne, _} | _], _, _) -> false;
-headers_match_all([{_, gt, PV} | PRest], D = [{_, _, DV} | _], NX)
-    when DV > PV -> headers_match_all(PRest, D, NX);
-headers_match_all([{_, gt, _} | _], _, _) -> false;
-headers_match_all([{_, ge, PV} | PRest], D = [{_, _, DV} | _], NX)
-    when DV >= PV -> headers_match_all(PRest, D, NX);
-headers_match_all([{_, ge, _} | _], _, _) -> false;
-headers_match_all([{_, lt, PV} | PRest], D = [{_, _, DV} | _], NX)
-    when DV < PV -> headers_match_all(PRest, D, NX);
-headers_match_all([{_, lt, _} | _], _, _) -> false;
-headers_match_all([{_, le, PV} | PRest], D = [{_, _, DV} | _], NX)
-    when DV =< PV -> headers_match_all(PRest, D, NX);
-headers_match_all([{_, le, _} | _], _, _) -> false.
+headers_match_all([{_, nx, _} | _], _) -> false;
+headers_match_all([{_, ex, _} | BNext], [ _ | DNext]) ->
+    headers_match_all(BNext, DNext);
+headers_match_all([{_, ne, PV} | BNext], DCur = [{_, _, DV} | _])
+    when PV /= DV -> headers_match_all(BNext, DCur);
+headers_match_all([{_, ne, _} | _], _) -> false;
+headers_match_all([{_, gt, PV} | BNext], DCur = [{_, _, DV} | _])
+    when DV > PV -> headers_match_all(BNext, DCur);
+headers_match_all([{_, gt, _} | _], _) -> false;
+headers_match_all([{_, ge, PV} | BNext], DCur = [{_, _, DV} | _])
+    when DV >= PV -> headers_match_all(BNext, DCur);
+headers_match_all([{_, ge, _} | _], _) -> false;
+headers_match_all([{_, lt, PV} | BNext], DCur = [{_, _, DV} | _])
+    when DV < PV -> headers_match_all(BNext, DCur);
+headers_match_all([{_, lt, _} | _], _) -> false;
+headers_match_all([{_, le, PV} | BNext], DCur = [{_, _, DV} | _])
+    when DV =< PV -> headers_match_all(BNext, DCur);
+headers_match_all([{_, le, _} | _], _) -> false.
 
 
 
@@ -332,12 +322,6 @@ flatten_bindings_args(Args) ->
 	flatten_bindings_args(Args, []).
 
 flatten_bindings_args([], Result) -> Result;
-flatten_bindings_args ([ {<<"x-?ex">>, array, Vs} | R ], Result) ->
-	Res = [ { <<"x-?ex ", K/binary>>, long, 0 } || {_, K} <- Vs ],
-	flatten_bindings_args (R, lists:append ([ Res , Result ]));
-flatten_bindings_args ([ {<<"x-?nx">>, array, Vs} | R ], Result) ->
-	Res = [ { <<"x-?nx ", K/binary>>, long, 0 } || {_, K} <- Vs ],
-	flatten_bindings_args (R, lists:append ([ Res , Result ]));
 flatten_bindings_args ([ {K, array, Vs} | R ], Result) ->
 	Res = [ { K, T, V } || {T, V} <- Vs ],
 	flatten_bindings_args (R, lists:append ([ Res , Result ]));
@@ -390,71 +374,68 @@ transform_binding_args_dests(VHost, [ {<<"x-match-delq-onfalse">>, longstr, V} |
 transform_binding_args_dests(VHost, [ {<<"x-match-dele-onfalse">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
     D = rabbit_misc:r(VHost, exchange, V),
     transform_binding_args_dests (VHost, R, DATS,DAFS, DDTS, sets:add_element(D,DDFS));
-
 transform_binding_args_dests(VHost, [ _ | R ], DATS,DAFS,DDTS,DDFS) ->
     transform_binding_args_dests (VHost, R, DATS,DAFS,DDTS,DDFS).
 
 
+transform_binding_args_operators([], Res) -> Res;
+transform_binding_args_operators([ {K, void, _V} | N ], Res) ->
+    transform_binding_args_operators (N, [ {K, ex,0} | Res]);
+transform_binding_args_operators([ {<<"x-?ex">>, longstr, K} | N ], Res) ->
+    transform_binding_args_operators (N, [ {K, ex,0} | Res]);
+transform_binding_args_operators([ {<<"x-?nx">>, longstr, K} | N ], Res) ->
+    transform_binding_args_operators (N, [ {K, nx,0} | Res]);
+transform_binding_args_operators([ {<<"x-?le ", K/binary>>, _, V} | N ], Res) ->
+    transform_binding_args_operators (N, [ {K, le, V} | Res]);
+transform_binding_args_operators([ {<<"x-?lt ", K/binary>>, _, V} | N ], Res) ->
+    transform_binding_args_operators (N, [ {K, lt, V} | Res]);
+transform_binding_args_operators([ {<<"x-?gt ", K/binary>>, _, V} | N ], Res) ->
+    transform_binding_args_operators (N, [ {K, gt, V} | Res]);
+transform_binding_args_operators([ {<<"x-?ge ", K/binary>>, _, V} | N ], Res) ->
+    transform_binding_args_operators (N, [ {K, ge, V} | Res]);
+transform_binding_args_operators([ {<<"x-?eq ", K/binary>>, _, V} | N ], Res) ->
+    transform_binding_args_operators (N, [ {K, eq, V} | Res]);
+transform_binding_args_operators([ {<<"x-?ne ", K/binary>>, _, V} | N ], Res) ->
+    transform_binding_args_operators (N, [ {K, ne, V} | Res]);
+transform_binding_args_operators([ {<<"x-", _/binary>>, _, _} | N ], Res) ->
+    transform_binding_args_operators (N, Res);
+transform_binding_args_operators([ {K, _, V} | N ], Res) ->
+    transform_binding_args_operators (N, [ {K, eq, V} | Res]).
+
+
 %% Delete x-* keys and ignore types excepted "void" used to match existence
-transform_binding_args(VHost, Args) -> transform_binding_args(VHost, Args, [], all, default_match_order(), nonx, undefined, ?DEFAULT_GOTO_ORDER, ?DEFAULT_GOTO_ORDER, false).
+transform_binding_args(Args) -> transform_binding_args(Args, all, undefined, ?DEFAULT_GOTO_ORDER, ?DEFAULT_GOTO_ORDER, false).
 
-transform_binding_args(_, [], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) -> { Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute };
+transform_binding_args([], BT, SOM, GOT, GOF, DontRoute) -> { BT, SOM, GOT, GOF, DontRoute };
 
-transform_binding_args(VHost, [ {K, void, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, [ {K, ex,0} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args(VHost, [ {<<"x-?ex ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, [ {K, ex,0} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
 
-transform_binding_args(VHost, [ {<<"x-?nx ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute)
-    when K > LNXK ->
-    transform_binding_args (VHost, R, [ {K, nx,0} | Result], BT, Order, K, SOM, GOT, GOF, DontRoute);
-transform_binding_args(VHost, [ {<<"x-?nx ", K/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, [ {K, nx,0} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
 
-transform_binding_args(VHost, [ {<<"x-?gt ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, [ {K, gt, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args(VHost, [ {<<"x-?ge ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, [ {K, ge, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args(VHost, [ {<<"x-?lt ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, [ {K, lt, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args(VHost, [ {<<"x-?le ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, [ {K, le, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args(VHost, [ {<<"x-?eq ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, [ {K, eq, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args(VHost, [ {<<"x-?ne ", K/binary>>, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, [ {K, ne, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args([{<<"x-match">>, longstr, <<"any">>} | R], _, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (R, any, SOM, GOT, GOF, DontRoute);
+transform_binding_args([{<<"x-match">>, longstr, <<"all">>} | R], _, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (R, all, SOM, GOT, GOF, DontRoute);
+transform_binding_args([{<<"x-match">>, longstr, <<"one">>} | R], _, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (R, one, SOM, GOT, GOF, DontRoute);
 
-transform_binding_args(VHost, [{<<"x-match">>, longstr, <<"any">>} | R], Result, _, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, Result, any, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args(VHost, [{<<"x-match">>, longstr, <<"all">>} | R], Result, _, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, Result, all, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args(VHost, [{<<"x-match">>, longstr, <<"one">>} | R], Result, _, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, Result, one, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args([{<<"x-match-goto">>, long, N} | R], BT, SOM, _, _, DontRoute) ->
+    transform_binding_args (R, BT, SOM, N, N, DontRoute);
+transform_binding_args([{<<"x-match-goto-true">>, long, N} | R], BT, SOM, _, GOF, DontRoute) ->
+    transform_binding_args (R, BT, SOM, N, GOF, DontRoute);
+transform_binding_args([{<<"x-match-goto-false">>, long, N} | R], BT, SOM, GOT, _, DontRoute) ->
+    transform_binding_args (R, BT, SOM, GOT, N, DontRoute);
 
-transform_binding_args(VHost, [{<<"x-match-order">>, long, Order} | R], Result, BT, _, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
+transform_binding_args([{<<"x-match-stop">>, bool, true} | R], BT, _, GOT, GOF, DontRoute) ->
+    transform_binding_args (R, BT, any, GOT, GOF, DontRoute);
+transform_binding_args([{<<"x-match-stop-true">>, bool, true} | R], BT, _, GOT, GOF, DontRoute) ->
+    transform_binding_args (R, BT, true, GOT, GOF, DontRoute);
+transform_binding_args([{<<"x-match-stop-false">>, bool, true} | R], BT, _, GOT, GOF, DontRoute) ->
+    transform_binding_args (R, BT, false, GOT, GOF, DontRoute);
 
-transform_binding_args(VHost, [{<<"x-match-goto">>, long, N} | R], Result, BT, Order, LNXK, SOM, _, _, DontRoute) ->
-    transform_binding_args (VHost, R, Result, BT, Order, LNXK, SOM, N, N, DontRoute);
-transform_binding_args(VHost, [{<<"x-match-goto-true">>, long, N} | R], Result, BT, Order, LNXK, SOM, _, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, Result, BT, Order, LNXK, SOM, N, GOF, DontRoute);
-transform_binding_args(VHost, [{<<"x-match-goto-false">>, long, N} | R], Result, BT, Order, LNXK, SOM, GOT, _, DontRoute) ->
-    transform_binding_args (VHost, R, Result, BT, Order, LNXK, SOM, GOT, N, DontRoute);
+transform_binding_args([{<<"x-match-dontroute">>, bool, true} | R], BT, SOM, GOT, GOF, _) ->
+    transform_binding_args (R, BT, SOM, GOT, GOF, true);
 
-transform_binding_args(VHost, [{<<"x-match-stop">>, bool, true} | R], Result, BT, Order, LNXK, _, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, Result, BT, Order, LNXK, any, GOT, GOF, DontRoute);
-transform_binding_args(VHost, [{<<"x-match-stop-true">>, bool, true} | R], Result, BT, Order, LNXK, _, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, Result, BT, Order, LNXK, true, GOT, GOF, DontRoute);
-transform_binding_args(VHost, [{<<"x-match-stop-false">>, bool, true} | R], Result, BT, Order, LNXK, _, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, Result, BT, Order, LNXK, false, GOT, GOF, DontRoute);
-
-transform_binding_args(VHost, [{<<"x-match-dontroute">>, bool, true} | R], Result, BT, Order, LNXK, SOM, GOT, GOF, _) ->
-    transform_binding_args (VHost, R, Result, BT, Order, LNXK, SOM, GOT, GOF, true);
-
-transform_binding_args(VHost, [ {<<"x-", _/binary>>, _T, _V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute);
-transform_binding_args(VHost, [ {K, _T, V} | R ], Result, BT, Order, LNXK, SOM, GOT, GOF, DontRoute) ->
-    transform_binding_args (VHost, R, [ {K, eq, V} | Result], BT, Order, LNXK, SOM, GOT, GOF, DontRoute).
+transform_binding_args([ _ | R ], BT, SOM, GOT, GOF, DontRoute) ->
+    transform_binding_args (R, BT, SOM, GOT, GOF, DontRoute).
 
 
 % Store the new "binding id" in rabbit_headers_bindings_keys whose key is X
@@ -462,19 +443,21 @@ transform_binding_args(VHost, [ {K, _T, V} | R ], Result, BT, Order, LNXK, SOM, 
 %add_binding(transaction, X = #exchange{name = #resource{virtual_host = VHost}, _='_'}, BindingToAdd = #binding{destination = Dest, args = Args}) ->
 add_binding(transaction, #exchange{name = #resource{virtual_host = VHost}} = X, BindingToAdd = #binding{destination = Dest, args = Args}) ->
     BindingId = crypto:hash(md5,term_to_binary(BindingToAdd)),
+    Order = get_match_order(Args),
     FArgs = flatten_bindings_args(Args),
     DestsOptions = transform_binding_args_dests(VHost, FArgs),
-    { CleanArgs, BindingType, Order, LNXK, SOM, GOT, GOF, DontRoute } = transform_binding_args (VHost, FArgs),
+    CleanArgs = transform_binding_args_operators (FArgs, []),
+    { BindingType, SOM, GOT, GOF, DontRoute } = transform_binding_args (FArgs),
     NewR = #headers_bindings_keys{exchange = X, binding_id = {Order,BindingId}},
     ok = mnesia:write (rabbit_headers_bindings_keys, NewR, write),
-    XR = #headers_bindings{exch_bind = {X, {Order,BindingId}}, destinations = {Dest,DestsOptions}, binding_type = BindingType, optims = {LNXK,0}, stop_on_match = SOM, gotos={GOT,GOF}, options={DontRoute,0}, cargs = rabbit_misc:sort_field_table(CleanArgs)},
+    XR = #headers_bindings{exch_bind = {X, {Order,BindingId}}, destinations = {Dest,DestsOptions}, binding_type = BindingType, stop_on_match = SOM, gotos={GOT,GOF}, options={DontRoute,0}, cargs = rabbit_misc:sort_field_table(CleanArgs)},
     ok = mnesia:write (rabbit_headers_bindings, XR, write),
 
     %% Because ordered_bag does not exist, we need to reorder bindings
-    %%  so that we don't need to sort in route/2
+    %%  so that we don't need to sort them in route/2
     OrderedBindings = lists:sort (mnesia:read (rabbit_headers_bindings_keys, X)),
     lists:foreach (fun(R) -> mnesia:delete_object (rabbit_headers_bindings_keys, R, write) end, OrderedBindings),
-    lists:foreach (fun(R) -> mnesia:write (rabbit_headers_bindings_keys, R, write) end, OrderedBindings);
+    lists:foreach (fun(R) -> ok = mnesia:write (rabbit_headers_bindings_keys, R, write) end, OrderedBindings);
 add_binding(_Tx, _X, _B) -> ok.
 
 
