@@ -339,38 +339,53 @@ transform_binding_args_dests(VHost, [ _ | R ], DATS,DAFS,DDTS,DDFS) ->
     transform_binding_args_dests (VHost, R, DATS,DAFS,DDTS,DDFS).
 
 
+% Returns the "compiled form" to be stored in mnesia of bindings args related to operators
 transform_binding_args_operators([], Res) -> Res;
+% void type for key K is the same as "key K must exists"
 transform_binding_args_operators([ {K, void, _V} | N ], Res) ->
     transform_binding_args_operators (N, [ {K, ex,0} | Res]);
+% key K must exists
+%TODO WHY THE HELL THE EXTRA 0 tuple item ???
 transform_binding_args_operators([ {<<"x-?ex">>, longstr, K} | N ], Res) ->
     transform_binding_args_operators (N, [ {K, ex,0} | Res]);
+% key K must NOT exists
 transform_binding_args_operators([ {<<"x-?nx">>, longstr, K} | N ], Res) ->
     transform_binding_args_operators (N, [ {K, nx,0} | Res]);
+% value of key K must be less than V or equal to V
 transform_binding_args_operators([ {<<"x-?le ", K/binary>>, _, V} | N ], Res) ->
     transform_binding_args_operators (N, [ {K, le, V} | Res]);
+% value of key K must be less than V
 transform_binding_args_operators([ {<<"x-?lt ", K/binary>>, _, V} | N ], Res) ->
     transform_binding_args_operators (N, [ {K, lt, V} | Res]);
+% value of key K must be greater than V
 transform_binding_args_operators([ {<<"x-?gt ", K/binary>>, _, V} | N ], Res) ->
     transform_binding_args_operators (N, [ {K, gt, V} | Res]);
+% value of key K must be greater than V or equal to V
 transform_binding_args_operators([ {<<"x-?ge ", K/binary>>, _, V} | N ], Res) ->
     transform_binding_args_operators (N, [ {K, ge, V} | Res]);
+% value of key K must be equal to V
 transform_binding_args_operators([ {<<"x-?eq ", K/binary>>, _, V} | N ], Res) ->
     transform_binding_args_operators (N, [ {K, eq, V} | Res]);
+% value of key K must NOT be equal to V
 transform_binding_args_operators([ {<<"x-?ne ", K/binary>>, _, V} | N ], Res) ->
     transform_binding_args_operators (N, [ {K, ne, V} | Res]);
+% not intersted in x-* keys..
 transform_binding_args_operators([ {<<"x-", _/binary>>, _, _} | N ], Res) ->
     transform_binding_args_operators (N, Res);
+% for all other cases, value of key K must be equal to V
 transform_binding_args_operators([ {K, _, V} | N ], Res) ->
     transform_binding_args_operators (N, [ {K, eq, V} | Res]).
 
 
-%% Delete x-* keys and ignore types excepted "void" used to match existence
+
+% Returns data to be stored in mnesia of bindings args related to binding type, x-match-goto logic and x-match-stop logic
+% Binding type 'all' by default
 transform_binding_args(Args) -> transform_binding_args(Args, all, none, ?DEFAULT_GOTO_ORDER, ?DEFAULT_GOTO_ORDER).
 
 transform_binding_args([], BT, SOM, GOT, GOF) -> { BT, SOM, GOT, GOF };
 
 
-
+% find binding type if specified; has been defaulted to 'all' in a later call
 transform_binding_args([{<<"x-match">>, longstr, <<"any">>} | R], _, SOM, GOT, GOF) ->
     transform_binding_args (R, any, SOM, GOT, GOF);
 transform_binding_args([{<<"x-match">>, longstr, <<"all">>} | R], _, SOM, GOT, GOF) ->
@@ -378,6 +393,7 @@ transform_binding_args([{<<"x-match">>, longstr, <<"all">>} | R], _, SOM, GOT, G
 transform_binding_args([{<<"x-match">>, longstr, <<"one">>} | R], _, SOM, GOT, GOF) ->
     transform_binding_args (R, one, SOM, GOT, GOF);
 
+% x-match-goto N is the same as declaring x-match-goto-ontrue N and x-match-goto-onfalse N
 transform_binding_args([{<<"x-match-goto">>, long, N} | R], BT, SOM, _, _) ->
     transform_binding_args (R, BT, SOM, N, N);
 transform_binding_args([{<<"x-match-goto-true">>, long, N} | R], BT, SOM, _, GOF) ->
@@ -392,6 +408,7 @@ transform_binding_args([{<<"x-match-stop">>, longstr, <<"ontrue">>} | R], BT, _,
 transform_binding_args([{<<"x-match-stop">>, longstr, <<"onfalse">>} | R], BT, _, GOT, GOF) ->
     transform_binding_args (R, BT, onfalse, GOT, GOF);
 
+% ELSE go to next arg
 transform_binding_args([ _ | R ], BT, SOM, GOT, GOF) ->
     transform_binding_args (R, BT, SOM, GOT, GOF).
 
