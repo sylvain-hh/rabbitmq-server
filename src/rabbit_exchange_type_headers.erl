@@ -74,10 +74,8 @@ get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R
 	    case { lists:member(Dest, Dests), ForceMatch } of
 		{ true, false } -> get_destinations (X, Headers, R, GotoOrder, Dests);
 		_ -> case { headers_match_all(TransformedArgs, Headers), SOM } of
-			 { false, onany } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
-			 { false, onfalse } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
-			 { true, onany } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
-			 { true, ontrue } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
+			 { false, {_, 1} } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
+			 { true, {1, _} } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
 			 { false, _ } -> get_destinations (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS));
 			 { true, _ } -> get_destinations (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS))
 		     end
@@ -87,10 +85,8 @@ get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R
 	    case { lists:member(Dest, Dests), ForceMatch } of
 		{ true, false } -> get_destinations (X, Headers, R, GotoOrder, Dests);
 		_ -> case { headers_match_one(TransformedArgs, Headers, false), SOM } of
-			 { false, onany } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
-			 { false, onfalse } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
-			 { true, onany } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
-			 { true, ontrue } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
+			 { false, {_, 1} } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
+			 { true, {1, _} } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
 			 { false, _ } -> get_destinations (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS));
 			 { true, _ } -> get_destinations (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS))
 		     end
@@ -100,10 +96,8 @@ get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R
 	    case { lists:member(Dest, Dests), ForceMatch } of
 		{ true, false } -> get_destinations (X, Headers, R, GotoOrder, Dests);
 		_ -> case { headers_match_any(TransformedArgs, Headers), SOM } of
-			 { false, onany } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
-			 { false, onfalse } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
-			 { true, onany } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
-			 { true, ontrue } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
+			 { false, {_, 1} } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
+			 { true, {1, _} } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
 			 { false, _ } -> get_destinations (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS));
 			 { true, _ } -> get_destinations (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS))
 		     end
@@ -380,7 +374,7 @@ transform_binding_args_operators([ {K, _, V} | N ], Res) ->
 
 % Returns data to be stored in mnesia of bindings args related to binding type, x-match-goto logic and x-match-stop logic
 % Binding type 'all' by default
-transform_binding_args(Args) -> transform_binding_args(Args, all, none, ?DEFAULT_GOTO_ORDER, ?DEFAULT_GOTO_ORDER).
+transform_binding_args(Args) -> transform_binding_args(Args, all, {_STOPONTRUE=0, _STOPONFALSE=0}, ?DEFAULT_GOTO_ORDER, ?DEFAULT_GOTO_ORDER).
 
 transform_binding_args([], BT, SOM, GOT, GOF) -> { BT, SOM, GOT, GOF };
 
@@ -400,12 +394,12 @@ transform_binding_args([{<<"x-match-goto-ontrue">>, long, N} | R], BT, SOM, _, G
 transform_binding_args([{<<"x-match-goto-onfalse">>, long, N} | R], BT, SOM, GOT, _) ->
     transform_binding_args (R, BT, SOM, GOT, N);
 
-transform_binding_args([{<<"x-match-stop">>, longstr, <<"onany">>} | R], BT, _, GOT, GOF) ->
-    transform_binding_args (R, BT, onany, GOT, GOF);
-transform_binding_args([{<<"x-match-stop">>, longstr, <<"ontrue">>} | R], BT, _, GOT, GOF) ->
-    transform_binding_args (R, BT, ontrue, GOT, GOF);
-transform_binding_args([{<<"x-match-stop">>, longstr, <<"onfalse">>} | R], BT, _, GOT, GOF) ->
-    transform_binding_args (R, BT, onfalse, GOT, GOF);
+% x-match-stop-*
+%TODO modifier la dependance management pour x-match-stop (non seul et chaine vide)
+transform_binding_args([{<<"x-match-stop-ontrue">>, longstr, <<"">>} | R], BT, {_, STOPONFALSE}, GOT, GOF) ->
+    transform_binding_args (R, BT, {1, STOPONFALSE}, GOT, GOF);
+transform_binding_args([{<<"x-match-stop-onfalse">>, longstr, <<"">>} | R], BT, {STOPONTRUE, _}, GOT, GOF) ->
+    transform_binding_args (R, BT, {STOPONTRUE, 1}, GOT, GOF);
 
 % ELSE go to next arg
 transform_binding_args([ _ | R ], BT, SOM, GOT, GOF) ->
