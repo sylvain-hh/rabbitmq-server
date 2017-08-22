@@ -131,7 +131,7 @@ validate_binding(_X, #binding{args = Args}) ->
         {longstr, Other}     -> {error,
                                  {binding_invalid,
                                   "Invalid x-match field value ~p; "
-                                  "expected all or any", [Other]}};
+                                  "expected all or any or one", [Other]}};
         {Type,    Other}     -> {error,
                                  {binding_invalid,
                                   "Invalid x-match field type ~p (value ~p); "
