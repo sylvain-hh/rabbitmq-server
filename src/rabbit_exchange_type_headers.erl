@@ -393,9 +393,8 @@ transform_binding_args([{<<"x-match">>, longstr, <<"all">>} | R], _, SOM, GOT, G
 transform_binding_args([{<<"x-match">>, longstr, <<"one">>} | R], _, SOM, GOT, GOF) ->
     transform_binding_args (R, one, SOM, GOT, GOF);
 
-% x-match-goto N is the same as declaring x-match-goto-ontrue N and x-match-goto-onfalse N
-transform_binding_args([{<<"x-match-goto">>, long, N} | R], BT, SOM, _, _) ->
-    transform_binding_args (R, BT, SOM, N, N);
+% x-match-goto-*
+%TODO supprimer x-match-goto seul dans l'aide du management
 transform_binding_args([{<<"x-match-goto-ontrue">>, long, N} | R], BT, SOM, _, GOF) ->
     transform_binding_args (R, BT, SOM, N, GOF);
 transform_binding_args([{<<"x-match-goto-onfalse">>, long, N} | R], BT, SOM, GOT, _) ->
