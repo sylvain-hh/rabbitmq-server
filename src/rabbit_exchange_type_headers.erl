@@ -143,6 +143,55 @@ validate_binding(Args, xmatchorder) ->
     end.
 
 
+validate_binding_args(Args) ->
+        validate_binding_args(Args, [], all).
+%% No more args, return result
+validate_binding_args([], Result)
+    -> Result;
+validate_binding_args ([ {K, array, Vs} | NextArg ], Result) ->
+	Res = [ { K, T, V } || {T, V} <- Vs ],
+	validate_binding_args (NextArg, lists:append ([ Res , Result ]));
+validate_binding_args ([ {K, T, V} | NextArg ], Result) ->
+	validate_binding_args (NextArg, [ {K, T, V} | Result ]).
+
+
+
+validate_binding_args_keys_are_uniq_v2 (Args) ->
+	erlang:length(Args) == sets:size(sets:from_list([K || {K,_,_} <- Args])).
+
+
+validate_binding_args_keys_are_uniq (Args) ->
+	validate_binding_args_keys_are_uniq (Args, _KeyNames = []).
+%% No (more) binding arg, keys are uniq
+validate_binding_args_keys_are_uniq ([], _) ->
+	true;
+validate_binding_args_keys_are_uniq ([ {K,_,_} | NextBinding], KeyNames) ->
+	case list:member (K, KeyNames) of
+		true -> {error,
+				{binding_invalid, "Multiple definition of key ~p", [K]}
+			};
+		_ -> validate_binding_args_keys_are_uniq (NextBinding, [K | KeyNames])
+	end.
+
+
+
+
+validate_binding_args_keys_excluded_v2 (Args, ExcludedKeys, ErrorMessage) ->
+	lists:subtract (ExcludedKeys, [K || {K,_,_} <- Args]) == [].
+
+
+validate_binding_args_keys_excluded (Args, [], ErrorMessage) ->
+	{error,
+%% {binding_invalid, ErrorMessage, []} ??
+		{binding_invalid, ErrorMessage}
+	};
+validate_binding_args_keys_excluded ([{K,_,_} | NextArg], ExcludedKeys, ErrorMessage) ->
+	case list:member (K, ExcludedKeys) of
+		true -> validate_binding_args_keys_excluded (NextArg, lists:delete (K, ExcludedKeys), ErrorMessage);
+		_ -> validate_binding_args_keys_excluded (NextArg, ExcludedKeys, ErrorMessage)
+	end.
+
+
 %% !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 %% REQUIRES BOTH PATTERN AND DATA TO BE SORTED ASCENDING BY KEY.
 %% !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
