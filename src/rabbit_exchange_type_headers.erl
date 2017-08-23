@@ -75,10 +75,10 @@ get_routes (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R ], Go
 	    case { lists:member(Dest, Dests), ForceMatch } of
 		{ true, false } -> get_routes (X, Headers, R, GotoOrder, Dests);
 		_ -> case { headers_match_all(TransformedArgs, Headers), SOM } of
-			 { true, {1, _} } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
+			 { true, {1, _} } -> lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS);
 			 { false, {_, 1} } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
-			 { true, _ } -> get_routes (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS))
-			 { false, _ } -> get_routes (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS));
+			 { true, _ } -> get_routes (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS));
+			 { false, _ } -> get_routes (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS))
 		     end
             end;
         %% Binding type is one
@@ -86,10 +86,10 @@ get_routes (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R ], Go
 	    case { lists:member(Dest, Dests), ForceMatch } of
 		{ true, false } -> get_routes (X, Headers, R, GotoOrder, Dests);
 		_ -> case { headers_match_one(TransformedArgs, Headers, false), SOM } of
+			 { true, {1, _} } -> lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS);
 			 { false, {_, 1} } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
-			 { true, {1, _} } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
-			 { false, _ } -> get_routes (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS));
-			 { true, _ } -> get_routes (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS))
+			 { true, _ } -> get_routes (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS));
+			 { false, _ } -> get_routes (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS))
 		     end
             end;
         %% Binding type is any
@@ -97,10 +97,10 @@ get_routes (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R ], Go
 	    case { lists:member(Dest, Dests), ForceMatch } of
 		{ true, false } -> get_routes (X, Headers, R, GotoOrder, Dests);
 		_ -> case { headers_match_any(TransformedArgs, Headers), SOM } of
+			 { true, {1, _} } -> lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS);
 			 { false, {_, 1} } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
-			 { true, {1, _} } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
-			 { false, _ } -> get_routes (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS));
-			 { true, _ } -> get_routes (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS))
+			 { true, _ } -> get_routes (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS));
+			 { false, _ } -> get_routes (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS))
 		     end
             end
     end.
