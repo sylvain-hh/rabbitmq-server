@@ -56,50 +56,51 @@ route(X, #delivery{message = #basic_message{content = Content}}) ->
         H         -> rabbit_misc:sort_field_table(H)
     end,
     BindingsIDs = ets:lookup(rabbit_headers_bindings_keys, X),
-    DDD = get_destinations (X, Headers, BindingsIDs, ?DEFAULT_GOTO_ORDER, []),
+    DDD = get_routes (X, Headers, BindingsIDs, ?DEFAULT_GOTO_ORDER, []),
     DDD.
 
 
 
 % Retreive destinations from bindings ids
-get_destinations (_X, _Headers, [], _, Dests) -> Dests;
-get_destinations (X, Headers, [ #headers_bindings_keys{binding_id={CurrentOrder,_}} | R ], GotoOrder, Dests) when is_number(GotoOrder) andalso CurrentOrder < GotoOrder ->
-    get_destinations (X, Headers, R, GotoOrder, Dests);
-get_destinations (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R ], GotoOrder, Dests) ->
+% No more bindings, returns computed Dests
+get_routes (_X, _Headers, [], _GotoOrder, Dests) -> Dests;
+get_routes (X, Headers, [ #headers_bindings_keys{binding_id={CurrentOrder,_}} | R ], GotoOrder, Dests) when is_number(GotoOrder) andalso CurrentOrder < GotoOrder ->
+    get_routes (X, Headers, R, GotoOrder, Dests);
+get_routes (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R ], GotoOrder, Dests) ->
     case ets:lookup(rabbit_headers_bindings, {X,BindingId}) of
         %% It may happen that a binding is deleted in the meantime (?)
-        [] -> get_destinations (X, Headers, R, GotoOrder, Dests);
+        [] -> get_routes (X, Headers, R, GotoOrder, Dests);
         %% Binding type is all
         [#headers_bindings{destinations={Dest,[DATS,DAFS,DDTS,DDFS]}, binding_type=all, stop_on_match=SOM, gotos={GOT,GOF}, options={ForceMatch}, cargs=TransformedArgs}] ->
 	    case { lists:member(Dest, Dests), ForceMatch } of
-		{ true, false } -> get_destinations (X, Headers, R, GotoOrder, Dests);
+		{ true, false } -> get_routes (X, Headers, R, GotoOrder, Dests);
 		_ -> case { headers_match_all(TransformedArgs, Headers), SOM } of
-			 { false, {_, 1} } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
 			 { true, {1, _} } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
-			 { false, _ } -> get_destinations (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS));
-			 { true, _ } -> get_destinations (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS))
+			 { false, {_, 1} } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
+			 { true, _ } -> get_routes (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS))
+			 { false, _ } -> get_routes (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS));
 		     end
             end;
         %% Binding type is one
         [#headers_bindings{destinations={Dest,[DATS,DAFS,DDTS,DDFS]}, binding_type=one, stop_on_match=SOM, gotos={GOT,GOF}, options={ForceMatch}, cargs=TransformedArgs}] ->
 	    case { lists:member(Dest, Dests), ForceMatch } of
-		{ true, false } -> get_destinations (X, Headers, R, GotoOrder, Dests);
+		{ true, false } -> get_routes (X, Headers, R, GotoOrder, Dests);
 		_ -> case { headers_match_one(TransformedArgs, Headers, false), SOM } of
 			 { false, {_, 1} } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
 			 { true, {1, _} } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
-			 { false, _ } -> get_destinations (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS));
-			 { true, _ } -> get_destinations (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS))
+			 { false, _ } -> get_routes (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS));
+			 { true, _ } -> get_routes (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS))
 		     end
             end;
         %% Binding type is any
         [#headers_bindings{destinations={Dest,[DATS,DAFS,DDTS,DDFS]}, binding_type=any, stop_on_match=SOM, gotos={GOT,GOF}, options={ForceMatch}, cargs=TransformedArgs}] ->
 	    case { lists:member(Dest, Dests), ForceMatch } of
-		{ true, false } -> get_destinations (X, Headers, R, GotoOrder, Dests);
+		{ true, false } -> get_routes (X, Headers, R, GotoOrder, Dests);
 		_ -> case { headers_match_any(TransformedArgs, Headers), SOM } of
 			 { false, {_, 1} } -> lists:subtract(lists:append([Dests, DAFS]),DDFS);
 			 { true, {1, _} } -> lists:subtract(lists:append([Dests, DATS]),DDTS);
-			 { false, _ } -> get_destinations (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS));
-			 { true, _ } -> get_destinations (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS))
+			 { false, _ } -> get_routes (X, Headers, R, GOF, lists:subtract(lists:append([Dests, DAFS]),DDFS));
+			 { true, _ } -> get_routes (X, Headers, R, GOT, lists:subtract(lists:append([[Dest | Dests], DATS]),DDTS))
 		     end
             end
     end.
@@ -148,14 +149,14 @@ validate_binding(Args, xmatchorder) ->
 
 % No more binding header to match with, return false
 headers_match_any([], _) -> false;
-% On no data left, only nx operator may return true..
+% On no data left, only nx operator can return true
 headers_match_any([{_, nx, _} | _], []) -> true;
 headers_match_any([_ | BNext], []) ->
     headers_match_any(BNext, []);
 % Go next data to match current binding key
 headers_match_any(BCur = [{BK, _, _} | _], [{DK, _, _} | DNext])
     when BK > DK -> headers_match_any(BCur, DNext);
-% Current binding key must not exist in data, return true
+% nx operator : current binding key must not exist in data, return true
 headers_match_any([{BK, nx, _} | _], [{DK, _, _} | _])
     when BK < DK -> true;
 % Current binding key does not exist in data, go next binding key
@@ -288,17 +289,11 @@ flatten_bindings_args ([ {K, T, V} | R ], Result) ->
 %% DAFS : Destinations to Add on False Set
 %% DDTS : Destinations to Del on True Set
 %% DDFS : Destinations to Del on False Set
-transform_binding_args_dests(VHost, Args) ->
-    [DATS,DAFS,DDTS,DDFS] = transform_binding_args_dests(VHost, Args, sets:new(), sets:new(), sets:new(), sets:new()),
+transform_binding_args_dests(VHost, BindingArgs) ->
+    [DATS,DAFS,DDTS,DDFS] = transform_binding_args_dests(VHost, BindingArgs, sets:new(), sets:new(), sets:new(), sets:new()),
     [ sets:to_list(DATS), sets:to_list(DAFS), sets:to_list(DDTS), sets:to_list(DDFS) ].
 
 transform_binding_args_dests(_, [], DATS,DAFS,DDTS,DDFS) -> [ DATS,DAFS,DDTS,DDFS ];
-transform_binding_args_dests(VHost, [ {<<"x-match-addq">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
-    D = rabbit_misc:r(VHost, queue, V),
-    transform_binding_args_dests (VHost, R, sets:add_element(D,DATS), sets:add_element(D,DAFS), DDTS,DDFS);
-transform_binding_args_dests(VHost, [ {<<"x-match-adde">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
-    D = rabbit_misc:r(VHost, exchange, V),
-    transform_binding_args_dests (VHost, R, sets:add_element(D,DATS), sets:add_element(D,DAFS), DDTS,DDFS);
 transform_binding_args_dests(VHost, [ {<<"x-match-addq-ontrue">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
     D = rabbit_misc:r(VHost, queue, V),
     transform_binding_args_dests (VHost, R, sets:add_element(D,DATS), DAFS, DDTS,DDFS);
@@ -311,12 +306,6 @@ transform_binding_args_dests(VHost, [ {<<"x-match-addq-onfalse">>, longstr, V} |
 transform_binding_args_dests(VHost, [ {<<"x-match-adde-onfalse">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
     D = rabbit_misc:r(VHost, exchange, V),
     transform_binding_args_dests (VHost, R, DATS, sets:add_element(D,DAFS), DDTS,DDFS);
-transform_binding_args_dests(VHost, [ {<<"x-match-delq">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
-    D = rabbit_misc:r(VHost, queue, V),
-    transform_binding_args_dests (VHost, R, DATS,DAFS, sets:add_element(D,DDTS), sets:add_element(D,DDFS));
-transform_binding_args_dests(VHost, [ {<<"x-match-dele">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
-    D = rabbit_misc:r(VHost, exchange, V),
-    transform_binding_args_dests (VHost, R, DATS,DAFS, sets:add_element(D,DDTS), sets:add_element(D,DDFS));
 transform_binding_args_dests(VHost, [ {<<"x-match-delq-ontrue">>, longstr, V} | R ], DATS,DAFS,DDTS,DDFS) ->
     D = rabbit_misc:r(VHost, queue, V),
     transform_binding_args_dests (VHost, R, DATS,DAFS, sets:add_element(D,DDTS), DDFS);
