@@ -138,18 +138,30 @@ validate_binding_args_xmatchtype(Args) ->
                                   "expected 'all' or 'any' or 'one'", [Other]}};
         {Type,    Other}     -> {error,
                                  {binding_invalid,
-                                  "Invalid x-match argument type '~s' (value '~s'); "
-                                  "expected string", [Type, Other]}}
+                                  "Invalid x-match argument type '~s'; "
+                                  "expected string", [Type]}}
     end.
 
 validate_binding_args_xmatchorder(Args) ->
     case rabbit_misc:table_lookup(Args, <<"x-match-order">>) of
-        undefined -> ok;
-        {long, N} when is_number(N) -> ok;
+        undefined -> validate_binding_args_check_xored_1 (Args);
+        {long, N} when is_number(N) -> validate_binding_args_check_xored_1 (Args);
         {Type, Other} -> {error, {binding_invalid,
-                        "Invalid x-match-order field type ~p (value ~p); "
-                        "expected long number", [Type, Other]}}
+                        "Invalid x-match-order argument type '~s' (value '~s'); "
+                        "expected number", [Type, Other]}}
     end.
+
+validate_binding_args_check_xored_1 (Args) ->
+	case validate_binding_args_check_exclusive_keys(Args, ["x-match-goto-onfalse", "x-match-stop-onfalse"], "x-match-goto-onfalse and x-match-stop-onfalse can't be defined in the same binding") of
+		ok -> validate_binding_args_check_xored_2 (Args);
+		Err -> Err
+	end.
+
+validate_binding_args_check_xored_2 (Args) ->
+	case validate_binding_args_check_exclusive_keys(Args, ["x-match-goto-ontrue", "x-match-stop-ontrue"], "x-match-goto-ontrue and x-match-stop-ontrue can't be defined in the same binding") of
+		ok -> ok;
+		Err -> Err
+	end.
 
 validate_binding_args_check_keys_uniqueness (Args) ->
 	Keys = [K || {K,_,_} <- Args],
