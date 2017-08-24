@@ -118,11 +118,18 @@ get_match_force(Args) ->
     end.
 
 %% Is called only for new bindings to create
-validate_binding(_X, #binding{args = Args}) ->
+validate_binding(_X, #binding{args = BindingArgs}) ->
+    case validate_binding_args_check_keys_uniqueness (BindingArgs) of
+	ok -> validate_binding_args_xmatchtype(Args);
+	Err -> Err
+    end.
+
+validate_binding_args_xmatchtype(Args) ->
     case rabbit_misc:table_lookup(Args, <<"x-match">>) of
-        {longstr, <<"all">>} -> validate_binding(Args, xmatchorder);
-        {longstr, <<"any">>} -> validate_binding(Args, xmatchorder);
-        {longstr, <<"one">>} -> validate_binding(Args, xmatchorder);
+        {longstr, <<"all">>} -> validate_binding_args_xmatchorder(Args);
+        {longstr, <<"any">>} -> validate_binding_args_xmatchorder(Args);
+        {longstr, <<"one">>} -> validate_binding_args_xmatchorder(Args);
+        undefined            -> validate_binding_args_xmatchorder(Args);
         {longstr, Other}     -> {error,
                                  {binding_invalid,
                                   "Invalid x-match field value ~p; "
@@ -130,10 +137,10 @@ validate_binding(_X, #binding{args = Args}) ->
         {Type,    Other}     -> {error,
                                  {binding_invalid,
                                   "Invalid x-match field type ~p (value ~p); "
-                                  "expected longstr", [Type, Other]}};
-        undefined            -> validate_binding(Args, xmatchorder)
-    end;
-validate_binding(Args, xmatchorder) ->
+                                  "expected longstr", [Type, Other]}}
+    end.
+
+validate_binding_args_xmatchorder(Args) ->
     case rabbit_misc:table_lookup(Args, <<"x-match-order">>) of
         {long, N} when is_number(N) -> ok;
         {Type, Other} -> {error, {binding_invalid,
@@ -141,18 +148,6 @@ validate_binding(Args, xmatchorder) ->
                         "expected long number", [Type, Other]}};
         undefined -> ok
     end.
-
-
-validate_binding_args(Args) ->
-        validate_binding_args(Args, [], all).
-%% No more args, return result
-validate_binding_args([], Result)
-    -> Result;
-validate_binding_args ([ {K, array, Vs} | NextArg ], Result) ->
-	Res = [ { K, T, V } || {T, V} <- Vs ],
-	validate_binding_args (NextArg, lists:append ([ Res , Result ]));
-validate_binding_args ([ {K, T, V} | NextArg ], Result) ->
-	validate_binding_args (NextArg, [ {K, T, V} | Result ]).
 
 
 
