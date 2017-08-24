@@ -173,10 +173,15 @@ validate_binding_args_check_keys_uniqueness (Args) ->
 	end.
 
 validate_binding_args_check_exclusive_keys (Args, ExcludedKeys, ErrorMessage) ->
-	Keys = [K || {K,_,_} <- Args],
-	case lists:subtract (ExcludedKeys, Keys) of
-		[] -> ok;
-		_ -> {error, {binding_invalid, ErrorMessage, []} }
+    io:format ("args : ~p~n", Args),
+    io:format ("xkeys : ~p~n", ExcludedKeys),
+	ArgsKeys = [K || {K,_,_} <- Args],
+    io:format ("argskeys : ~p~n", ArgsKeys),
+    BadListLengthResult = erlang:length (ArgsKeys) - erlang:length (ExcludedKeys),
+    io:format ("bllr : ~p~n", BadListLengthResult),
+	case erlang:length (lists:subtract (ArgsKeys, ExcludedKeys)) =:= BadListLengthResult of
+		true -> {error, {binding_invalid, ErrorMessage, []} };
+		_ -> ok
 	end.
 
 
