@@ -156,39 +156,20 @@ validate_binding_args ([ {K, T, V} | NextArg ], Result) ->
 
 
 
-validate_binding_args_keys_are_uniq_v2 (Args) ->
-	erlang:length(Args) == sets:size(sets:from_list([K || {K,_,_} <- Args])).
-
-
-validate_binding_args_keys_are_uniq (Args) ->
-	validate_binding_args_keys_are_uniq (Args, _KeyNames = []).
-%% No (more) binding arg, keys are uniq
-validate_binding_args_keys_are_uniq ([], _) ->
-	true;
-validate_binding_args_keys_are_uniq ([ {K,_,_} | NextBinding], KeyNames) ->
-	case list:member (K, KeyNames) of
-		true -> {error,
-				{binding_invalid, "Multiple definition of key ~p", [K]}
-			};
-		_ -> validate_binding_args_keys_are_uniq (NextBinding, [K | KeyNames])
+validate_binding_args_check_keys_uniqueness (Args) ->
+	Keys = [K || {K,_,_} <- Args],
+	DistinctKeys = sets:to_list (sets:from_list (Keys)),
+	DuplicatedKeysStr = string:join (lists:subtract (DistinctKeys, Keys), ", "),
+	case DuplicatedKeysStr =:= "" of
+		true -> ok;
+		{error, {binding_invalid, "Multiple definition of key(s) ~p", [DuplicatedKeysStr]} }
 	end.
 
-
-
-
-validate_binding_args_keys_excluded_v2 (Args, ExcludedKeys, ErrorMessage) ->
-	lists:subtract (ExcludedKeys, [K || {K,_,_} <- Args]) == [].
-
-
-validate_binding_args_keys_excluded (Args, [], ErrorMessage) ->
-	{error,
-%% {binding_invalid, ErrorMessage, []} ??
-		{binding_invalid, ErrorMessage}
-	};
-validate_binding_args_keys_excluded ([{K,_,_} | NextArg], ExcludedKeys, ErrorMessage) ->
-	case list:member (K, ExcludedKeys) of
-		true -> validate_binding_args_keys_excluded (NextArg, lists:delete (K, ExcludedKeys), ErrorMessage);
-		_ -> validate_binding_args_keys_excluded (NextArg, ExcludedKeys, ErrorMessage)
+validate_binding_args_check_exclusive_keys (Args, ExcludedKeys, ErrorMessage) ->
+	Keys = [K || {K,_,_} <- Args],
+	case lists:subtract (ExcludedKeys, Keys) of
+		[] -> ok;
+		{error, {binding_invalid, ErrorMessage, []} }
 	end.
 
 
