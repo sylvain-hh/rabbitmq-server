@@ -117,13 +117,15 @@ get_match_force(Args) ->
 	_ -> false
     end.
 
-%% Is called only for new bindings to create
+%% (Is called only for new bindings to create)
+%% (duplicated keys should not happen; we could check that point in the management plugin)
 validate_binding(_X, #binding{args = BindingArgs}) ->
     case validate_binding_args_check_keys_uniqueness (BindingArgs) of
-	ok -> validate_binding_args_xmatchtype(Args);
+	ok -> validate_binding_args_xmatchtype(BindingArgs);
 	Err -> Err
     end.
 
+%% (x-match type could be checked in the management plugin too; ie. message is not clear for number type)
 validate_binding_args_xmatchtype(Args) ->
     case rabbit_misc:table_lookup(Args, <<"x-match">>) of
         {longstr, <<"all">>} -> validate_binding_args_xmatchorder(Args);
@@ -132,24 +134,22 @@ validate_binding_args_xmatchtype(Args) ->
         undefined            -> validate_binding_args_xmatchorder(Args);
         {longstr, Other}     -> {error,
                                  {binding_invalid,
-                                  "Invalid x-match field value ~p; "
-                                  "expected all or any or one", [Other]}};
+                                  "Invalid x-match argument value '~s'; "
+                                  "expected 'all' or 'any' or 'one'", [Other]}};
         {Type,    Other}     -> {error,
                                  {binding_invalid,
-                                  "Invalid x-match field type ~p (value ~p); "
-                                  "expected longstr", [Type, Other]}}
+                                  "Invalid x-match argument type '~s' (value '~s'); "
+                                  "expected string", [Type, Other]}}
     end.
 
 validate_binding_args_xmatchorder(Args) ->
     case rabbit_misc:table_lookup(Args, <<"x-match-order">>) of
+        undefined -> ok;
         {long, N} when is_number(N) -> ok;
         {Type, Other} -> {error, {binding_invalid,
                         "Invalid x-match-order field type ~p (value ~p); "
-                        "expected long number", [Type, Other]}};
-        undefined -> ok
+                        "expected long number", [Type, Other]}}
     end.
-
-
 
 validate_binding_args_check_keys_uniqueness (Args) ->
 	Keys = [K || {K,_,_} <- Args],
@@ -157,14 +157,14 @@ validate_binding_args_check_keys_uniqueness (Args) ->
 	DuplicatedKeysStr = string:join (lists:subtract (DistinctKeys, Keys), ", "),
 	case DuplicatedKeysStr =:= "" of
 		true -> ok;
-		{error, {binding_invalid, "Multiple definition of key(s) ~p", [DuplicatedKeysStr]} }
+		_ -> {error, {binding_invalid, "Multiple definition of key(s) ~p", [DuplicatedKeysStr]} }
 	end.
 
 validate_binding_args_check_exclusive_keys (Args, ExcludedKeys, ErrorMessage) ->
 	Keys = [K || {K,_,_} <- Args],
 	case lists:subtract (ExcludedKeys, Keys) of
 		[] -> ok;
-		{error, {binding_invalid, ErrorMessage, []} }
+		_ -> {error, {binding_invalid, ErrorMessage, []} }
 	end.
 
 
