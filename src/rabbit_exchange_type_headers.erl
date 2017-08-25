@@ -125,6 +125,16 @@ validate_binding(_X, #binding{args = BindingArgs}) ->
 	    Err -> Err
     end.
 
+%% TODO : that one have not been tested yet
+validate_binding_args_check_keys_uniqueness (Args) ->
+	Keys = [K || {K,_,_} <- Args],
+	DistinctKeys = sets:to_list (sets:from_list (Keys)),
+	DuplicatedKeysStr = string:join (lists:subtract (DistinctKeys, Keys), ", "),
+	case DuplicatedKeysStr =:= "" of
+		true -> ok;
+		_ -> {error, {binding_invalid, "Multiple definition of key(s) ~p", [DuplicatedKeysStr]} }
+	end.
+
 %% (x-match type could be checked earlier in the management plugin too; ie. message is not clear for number type)
 validate_binding_args_xmatchtype(Args) ->
     case rabbit_misc:table_lookup (Args, <<"x-match">>) of
@@ -144,34 +154,36 @@ validate_binding_args_xmatchtype(Args) ->
 
 validate_binding_args_xmatchorder(Args) ->
     case rabbit_misc:table_lookup(Args, <<"x-match-order">>) of
-        undefined -> validate_binding_args_check_xored_1 (Args);
-        {long, N} when is_number(N) -> validate_binding_args_check_xored_1 (Args);
+        undefined -> validate_binding_args_xmatchstop (Args);
+        {long, N} when is_number(N) -> validate_binding_args_xmatchstop (Args);
         {Type, Other} -> {error, {binding_invalid,
                         "Invalid x-match-order argument type '~s' (value '~p'); "
                         "expected number", [Type, Other]}}
     end.
 
-validate_binding_args_check_xored_1 (Args) ->
+validate_binding_args_xmatchstop(Args) ->
+    XMatchStops = { rabbit_misc:table_lookup(Args, <<"x-match-stop-ontrue">>), rabbit_misc:table_lookup(Args, <<"x-match-stop-onfalse">>) },
+    case XMatchStops of
+        {undefined, undefined} -> validate_binding_args_check_xor_false (Args);
+        {{boolean, true},{boolean, true}} -> validate_binding_args_check_xor_false (Args);
+        _               -> {error, {binding_invalid,
+                         "Invalid x-match-stop-ontrue or x-match-stop-onfalse arguments;"
+                         " only boolean type and true value are expected, else they must not be specified.", []}}
+    end.
+
+
+validate_binding_args_check_xor_false (Args) ->
 	case validate_binding_args_check_exclusive_keys(Args, [<<"x-match-goto-onfalse">>, <<"x-match-stop-onfalse">>], "Arguments x-match-goto-onfalse and x-match-stop-onfalse can't be declared in the same binding") of
-		ok -> validate_binding_args_check_xored_2 (Args);
+		ok -> validate_binding_args_check_xor_true (Args);
 		Err -> Err
 	end.
 
-validate_binding_args_check_xored_2 (Args) ->
+validate_binding_args_check_xor_true (Args) ->
 	case validate_binding_args_check_exclusive_keys(Args, [<<"x-match-goto-ontrue">>, <<"x-match-stop-ontrue">>], "Arguments x-match-goto-ontrue and x-match-stop-ontrue can't be declared in the same binding") of
 		ok -> ok;
 		Err -> Err
 	end.
 
-%% TODO : that one have not been tested yet
-validate_binding_args_check_keys_uniqueness (Args) ->
-	Keys = [K || {K,_,_} <- Args],
-	DistinctKeys = sets:to_list (sets:from_list (Keys)),
-	DuplicatedKeysStr = string:join (lists:subtract (DistinctKeys, Keys), ", "),
-	case DuplicatedKeysStr =:= "" of
-		true -> ok;
-		_ -> {error, {binding_invalid, "Multiple definition of key(s) ~p", [DuplicatedKeysStr]} }
-	end.
 
 validate_binding_args_check_exclusive_keys (Args, ExcludedKeys, ErrorMessage) ->
 	ArgsKeysSet = sets:from_list ([K || {K,_,_} <- Args]),
@@ -423,9 +435,9 @@ transform_binding_args([{<<"x-match-goto-onfalse">>, long, N} | R], BT, SOM, GOT
 
 % x-match-stop-*
 %TODO modifier la dependance management pour x-match-stop (non seul et chaine vide)
-transform_binding_args([{<<"x-match-stop-ontrue">>, longstr, <<"">>} | R], BT, {_, STOPONFALSE}, GOT, GOF) ->
+transform_binding_args([{<<"x-match-stop-ontrue">>, boolean, true} | R], BT, {_, STOPONFALSE}, GOT, GOF) ->
     transform_binding_args (R, BT, {1, STOPONFALSE}, GOT, GOF);
-transform_binding_args([{<<"x-match-stop-onfalse">>, longstr, <<"">>} | R], BT, {STOPONTRUE, _}, GOT, GOF) ->
+transform_binding_args([{<<"x-match-stop-onfalse">>, boolean, true} | R], BT, {STOPONTRUE, _}, GOT, GOF) ->
     transform_binding_args (R, BT, {STOPONTRUE, 1}, GOT, GOF);
 
 % ELSE go to next arg
