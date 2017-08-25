@@ -121,22 +121,22 @@ get_match_force(Args) ->
 %% (duplicated keys should not happen; we could check that point in the management plugin)
 validate_binding(_X, #binding{args = BindingArgs}) ->
     case validate_binding_args_check_keys_uniqueness (BindingArgs) of
-	ok -> validate_binding_args_xmatchtype(BindingArgs);
-	Err -> Err
+	    ok -> validate_binding_args_xmatchtype (BindingArgs);
+	    Err -> Err
     end.
 
-%% (x-match type could be checked in the management plugin too; ie. message is not clear for number type)
+%% (x-match type could be checked earlier in the management plugin too; ie. message is not clear for number type)
 validate_binding_args_xmatchtype(Args) ->
-    case rabbit_misc:table_lookup(Args, <<"x-match">>) of
-        {longstr, <<"all">>} -> validate_binding_args_xmatchorder(Args);
-        {longstr, <<"any">>} -> validate_binding_args_xmatchorder(Args);
-        {longstr, <<"one">>} -> validate_binding_args_xmatchorder(Args);
-        undefined            -> validate_binding_args_xmatchorder(Args);
+    case rabbit_misc:table_lookup (Args, <<"x-match">>) of
+        {longstr, <<"all">>} -> validate_binding_args_xmatchorder (Args);
+        {longstr, <<"any">>} -> validate_binding_args_xmatchorder (Args);
+        {longstr, <<"one">>} -> validate_binding_args_xmatchorder (Args);
+        undefined            -> validate_binding_args_xmatchorder (Args);
         {longstr, Other}     -> {error,
                                  {binding_invalid,
                                   "Invalid x-match argument value '~s'; "
                                   "expected 'all' or 'any' or 'one'", [Other]}};
-        {Type,    Other}     -> {error,
+        {Type, _}            -> {error,
                                  {binding_invalid,
                                   "Invalid x-match argument type '~s'; "
                                   "expected string", [Type]}}
@@ -147,22 +147,23 @@ validate_binding_args_xmatchorder(Args) ->
         undefined -> validate_binding_args_check_xored_1 (Args);
         {long, N} when is_number(N) -> validate_binding_args_check_xored_1 (Args);
         {Type, Other} -> {error, {binding_invalid,
-                        "Invalid x-match-order argument type '~s' (value '~s'); "
+                        "Invalid x-match-order argument type '~s' (value '~p'); "
                         "expected number", [Type, Other]}}
     end.
 
 validate_binding_args_check_xored_1 (Args) ->
-	case validate_binding_args_check_exclusive_keys(Args, ["x-match-goto-onfalse", "x-match-stop-onfalse"], "x-match-goto-onfalse and x-match-stop-onfalse can't be defined in the same binding") of
+	case validate_binding_args_check_exclusive_keys(Args, [<<"x-match-goto-onfalse">>, <<"x-match-stop-onfalse">>], "Arguments x-match-goto-onfalse and x-match-stop-onfalse can't be declared in the same binding") of
 		ok -> validate_binding_args_check_xored_2 (Args);
 		Err -> Err
 	end.
 
 validate_binding_args_check_xored_2 (Args) ->
-	case validate_binding_args_check_exclusive_keys(Args, ["x-match-goto-ontrue", "x-match-stop-ontrue"], "x-match-goto-ontrue and x-match-stop-ontrue can't be defined in the same binding") of
+	case validate_binding_args_check_exclusive_keys(Args, [<<"x-match-goto-ontrue">>, <<"x-match-stop-ontrue">>], "Arguments x-match-goto-ontrue and x-match-stop-ontrue can't be declared in the same binding") of
 		ok -> ok;
 		Err -> Err
 	end.
 
+%% TODO : that one have not been tested yet
 validate_binding_args_check_keys_uniqueness (Args) ->
 	Keys = [K || {K,_,_} <- Args],
 	DistinctKeys = sets:to_list (sets:from_list (Keys)),
@@ -173,16 +174,11 @@ validate_binding_args_check_keys_uniqueness (Args) ->
 	end.
 
 validate_binding_args_check_exclusive_keys (Args, ExcludedKeys, ErrorMessage) ->
-    io:format ("args : ~p~n", Args),
-    io:format ("xkeys : ~p~n", ExcludedKeys),
-	ArgsKeys = [K || {K,_,_} <- Args],
-    io:format ("argskeys : ~p~n", ArgsKeys),
-    BadListLengthResult = erlang:length (ArgsKeys) - erlang:length (ExcludedKeys),
-    io:format ("bllr : ~p~n", BadListLengthResult),
-	case erlang:length (lists:subtract (ArgsKeys, ExcludedKeys)) =:= BadListLengthResult of
-		true -> {error, {binding_invalid, ErrorMessage, []} };
-		_ -> ok
-	end.
+	ArgsKeysSet = sets:from_list ([K || {K,_,_} <- Args]),
+    case sets:is_subset (sets:from_list (ExcludedKeys), ArgsKeysSet) of
+        true -> {error, {binding_invalid, ErrorMessage, []} };
+        _ -> ok
+    end.
 
 
 %% !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
