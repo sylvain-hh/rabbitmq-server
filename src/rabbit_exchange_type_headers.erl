@@ -113,7 +113,7 @@ get_match_order(Args) ->
     end.
 get_match_force(Args) ->
     case rabbit_misc:table_lookup(Args, <<"x-match-force">>) of
-        {boolean, true} -> true;
+        {bool, true} -> true;
 	_ -> false
     end.
 
@@ -165,7 +165,7 @@ validate_binding_args_xmatchstop(Args) ->
     XMatchStops = { rabbit_misc:table_lookup(Args, <<"x-match-stop-ontrue">>), rabbit_misc:table_lookup(Args, <<"x-match-stop-onfalse">>) },
     case XMatchStops of
         {undefined, undefined} -> validate_binding_args_check_xor_false (Args);
-        {{boolean, true},{boolean, true}} -> validate_binding_args_check_xor_false (Args);
+        {{bool, true},{bool, true}} -> validate_binding_args_check_xor_false (Args);
         _               -> {error, {binding_invalid,
                          "Invalid x-match-stop-ontrue or x-match-stop-onfalse arguments;"
                          " only boolean type and true value are expected, else they must not be specified.", []}}
@@ -435,9 +435,9 @@ transform_binding_args([{<<"x-match-goto-onfalse">>, long, N} | R], BT, SOM, GOT
 
 % x-match-stop-*
 %TODO modifier la dependance management pour x-match-stop (non seul et chaine vide)
-transform_binding_args([{<<"x-match-stop-ontrue">>, boolean, true} | R], BT, {_, STOPONFALSE}, GOT, GOF) ->
+transform_binding_args([{<<"x-match-stop-ontrue">>, bool, true} | R], BT, {_, STOPONFALSE}, GOT, GOF) ->
     transform_binding_args (R, BT, {1, STOPONFALSE}, GOT, GOF);
-transform_binding_args([{<<"x-match-stop-onfalse">>, boolean, true} | R], BT, {STOPONTRUE, _}, GOT, GOF) ->
+transform_binding_args([{<<"x-match-stop-onfalse">>, bool, true} | R], BT, {STOPONTRUE, _}, GOT, GOF) ->
     transform_binding_args (R, BT, {STOPONTRUE, 1}, GOT, GOF);
 
 % ELSE go to next arg
