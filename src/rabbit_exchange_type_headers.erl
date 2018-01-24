@@ -26,6 +26,10 @@
          remove_bindings/3, assert_args_equivalence/2]).
 -export([info/1, info/2]).
 
+% From now, a binding has an order which is part of the new mnesia key table so that during route process bindings will be read in order
+% PS : I will make this a real useable property in next commits coming soon :)
+-define(DEFAULT_BINDING_ORDER, 200).
+
 -rabbit_boot_step({?MODULE,
                    [{description, "exchange type headers"},
                     {mfa,         {rabbit_registry, register,
@@ -71,7 +75,7 @@ get_routes (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R ], Re
 
 
 %%
-%% Requires headers to be sorted as binding's args 
+%% Requires message headers to be sorted (bindings are already via add_binding)
 %%
 
 %% Binding type 'all' checks
@@ -121,23 +125,8 @@ headers_match_any([_ | BNext], DCur) ->
     headers_match_any(BNext, DCur).
 
 
-validate_binding(_X, #binding{args = Args}) ->
-    case rabbit_misc:table_lookup(Args, <<"x-match">>) of
-        {longstr, <<"all">>} -> ok;
-        {longstr, <<"any">>} -> ok;
-        {longstr, Other}     -> {error,
-                                 {binding_invalid,
-                                  "Invalid x-match field value ~p; "
-                                  "expected all or any", [Other]}};
-        {Type,    Other}     -> {error,
-                                 {binding_invalid,
-                                  "Invalid x-match field type ~p (value ~p); "
-                                  "expected longstr", [Type, Other]}};
-        undefined            -> ok %% [0]
-    end.
 %% [0] spec is vague on whether it can be omitted but in practice it's
 %% useful to allow people to do this
-
 parse_x_match({longstr, <<"all">>}) -> all;
 parse_x_match({longstr, <<"any">>}) -> any;
 parse_x_match(_)                    -> all. %% legacy; we didn't validate
@@ -161,18 +150,15 @@ get_match_operators([ {K, _, V} | N ], Res) ->
 
 
 add_binding(transaction, #exchange{name = #resource{virtual_host = VHost}} = X, BindingToAdd = #binding{destination = MainDest, args = BindingArgs}) ->
-% From now, a binding has an order which is part of the mnesia key table, so that during route process bindings will be read in order
-% PS : I will make this a real useable property in next commits coming soon :)
-    DefaultOrder = 200,
 % A binding have now an Id; part of the mnesia key table too
     BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
     MatchOperators = get_match_operators (BindingArgs, []),
 % Store the new exchange's bindingId
-    NewBindingRecord = #headers_bindings_keys{exchange = X, binding_id = {DefaultOrder,BindingId}},
+    NewBindingRecord = #headers_bindings_keys{exchange = X, binding_id = {?DEFAULT_BINDING_ORDER,BindingId}},
     ok = mnesia:write (rabbit_headers_bindings_keys, NewBindingRecord, write),
 % Store the new binding details
-    NewBindingDetails = #headers_bindings{exch_bind = {X, {DefaultOrder,BindingId}}, binding_type = BindingType, destinations = MainDest, compiled_args = rabbit_misc:sort_field_table(MatchOperators)},
+    NewBindingDetails = #headers_bindings{exch_bind = {X, {?DEFAULT_BINDING_ORDER, BindingId}}, binding_type = BindingType, destinations = MainDest, compiled_args = rabbit_misc:sort_field_table(MatchOperators)},
     ok = mnesia:write (rabbit_headers_bindings, NewBindingDetails, write),
     %% Because ordered_bag does not exist, we need to reorder all bindings here
     %%  so that we don't need to sort them again in route/2 !
@@ -182,10 +168,36 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost}} = X, 
 add_binding(_Tx, _X, _B) -> ok.
 
 
+remove_bindings(transaction, X, Bs) ->
+    BindingsIDs_todel = [ {get_match_order(Args), crypto:hash(md5,term_to_binary(Binding)) } || Binding=#binding{args=Args} <- Bs ],
+
+    lists:foreach (fun({Order,BindingID_todel}) -> mnesia:delete ({ rabbit_headers_bindings, { X, {Order, BindingID_todel } } }) end, BindingsIDs_todel),
+    lists:foreach (
+        fun({Order,BindingID_todel}) ->
+            R_todel = #headers_bindings_keys{exchange = X, binding_id = {Order,BindingID_todel}},
+            mnesia:delete_object (rabbit_headers_bindings_keys, R_todel, write)
+        end, BindingsIDs_todel);
+remove_bindings(_Tx, _X, _Bs) -> ok.
+
+validate_binding(_X, #binding{args = Args}) ->
+    case rabbit_misc:table_lookup(Args, <<"x-match">>) of
+        {longstr, <<"all">>} -> ok;
+        {longstr, <<"any">>} -> ok;
+        {longstr, Other}     -> {error,
+                                 {binding_invalid,
+                                  "Invalid x-match field value ~p; "
+                                  "expected all or any", [Other]}};
+        {Type,    Other}     -> {error,
+                                 {binding_invalid,
+                                  "Invalid x-match field type ~p (value ~p); "
+                                  "expected longstr", [Type, Other]}};
+        undefined            -> ok %% [0]
+    end;
 validate(_X) -> ok.
+
+
 create(_Tx, _X) -> ok.
 delete(_Tx, _X, _Bs) -> ok.
 policy_changed(_X1, _X2) -> ok.
-remove_bindings(_Tx, _X, _Bs) -> ok.
 assert_args_equivalence(X, Args) ->
     rabbit_exchange:assert_args_equivalence(X, Args).
