@@ -169,7 +169,7 @@ add_binding(_Tx, _X, _B) -> ok.
 
 
 remove_bindings(transaction, X, Bs) ->
-    BindingsIDs_todel = [ {get_match_order(Args), crypto:hash(md5,term_to_binary(Binding)) } || Binding=#binding{args=Args} <- Bs ],
+    BindingsIDs_todel = [ {?DEFAULT_BINDING_ORDER, crypto:hash(md5,term_to_binary(Binding)) } || Binding=#binding{args=Args} <- Bs ],
 
     lists:foreach (fun({Order,BindingID_todel}) -> mnesia:delete ({ rabbit_headers_bindings, { X, {Order, BindingID_todel } } }) end, BindingsIDs_todel),
     lists:foreach (
