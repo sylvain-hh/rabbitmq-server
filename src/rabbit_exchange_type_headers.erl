@@ -192,10 +192,10 @@ validate_binding(_X, #binding{args = Args}) ->
                                   "Invalid x-match field type ~p (value ~p); "
                                   "expected longstr", [Type, Other]}};
         undefined            -> ok %% [0]
-    end;
+    end.
+
+
 validate(_X) -> ok.
-
-
 create(_Tx, _X) -> ok.
 delete(_Tx, _X, _Bs) -> ok.
 policy_changed(_X1, _X2) -> ok.
