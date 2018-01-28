@@ -53,22 +53,22 @@ route(X, #delivery{message = #basic_message{content = Content}}) ->
               end,
     CurrentOrderedBindings = case ets:lookup(rabbit_headers_bindings, X) of
         [] -> [];
-        [#headers_bindings{exchange = X, bindings = E}] -> E
+        [#headers_bindings{bindings = E}] -> E
     end,
-    get_routes (X, Headers, CurrentOrderedBindings, []).
+    get_routes (Headers, CurrentOrderedBindings, []).
 
-get_routes (_X, _Headers, [], DestsResult) -> DestsResult;
-get_routes (X, Headers, [ {BindingOrder, _, BindingType, [MainDest], Args, []} | R ], Res) ->
+get_routes (_Headers, [], DestsResult) -> DestsResult;
+get_routes (Headers, [ {BindingOrder, _, BindingType, [MainDest], Args, []} | R ], Res) ->
     case BindingType of
         all ->
             case headers_match_all (Args, Headers) of
-                true -> get_routes (X, Headers, R, [ MainDest | Res]);
-                _ -> get_routes (X, Headers, R, Res)
+                true -> get_routes (Headers, R, [ MainDest | Res]);
+                _ -> get_routes (Headers, R, Res)
             end;
         any ->
             case headers_match_any (Args, Headers) of
-                true -> get_routes (X, Headers, R, [ MainDest | Res]);
-                _ -> get_routes (X, Headers, R, Res)
+                true -> get_routes (Headers, R, [ MainDest | Res]);
+                _ -> get_routes (Headers, R, Res)
             end
     end.
 
