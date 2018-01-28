@@ -182,6 +182,10 @@ remove_bindings(_Tx, _X, _Bs) ->
     ok.
 
 
+delete(transaction, X, _) ->
+    ok = mnesia:delete (rabbit_headers_bindings, X, write);
+delete(_, _, _) -> ok.
+
 validate_binding(_X, #binding{args = Args}) ->
     case rabbit_misc:table_lookup(Args, <<"x-match">>) of
         {longstr, <<"all">>} -> ok;
@@ -200,7 +204,6 @@ validate_binding(_X, #binding{args = Args}) ->
 
 validate(_X) -> ok.
 create(_Tx, _X) -> ok.
-delete(_Tx, _X, _Bs) -> ok.
 policy_changed(_X1, _X2) -> ok.
 assert_args_equivalence(X, Args) ->
     rabbit_exchange:assert_args_equivalence(X, Args).
