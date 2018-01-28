@@ -45,30 +45,29 @@ description() ->
 
 serialise_events() -> false.
 
+
 route(X, #delivery{message = #basic_message{content = Content}}) ->
     Headers = case (Content#content.properties)#'P_basic'.headers of
                   undefined -> [];
                   H         -> rabbit_misc:sort_field_table(H)
               end,
-    BindingsIDs = ets:lookup(rabbit_headers_bindings_keys, X),
-    get_routes (X, Headers, BindingsIDs, []).
- 
+    CurrentOrderedBindings = case ets:lookup(rabbit_headers_bindings2, X) of
+        [] -> [];
+        [#headers_bindings2{exchange = X, bindings = E}] -> E
+    end,
+    get_routes (X, Headers, CurrentOrderedBindings, []).
 
 get_routes (_X, _Headers, [], DestsResult) -> DestsResult;
-get_routes (X, Headers, [ #headers_bindings_keys{binding_id=BindingId} | R ], Res) ->
-    case ets:lookup(rabbit_headers_bindings, {X,BindingId}) of
-        %% It may happen that a binding is deleted in the meantime (?)
-        [] -> get_routes (X, Headers, R, Res);
-        %% Binding type is all
-        [#headers_bindings{destinations=Dest, binding_type=all, compiled_args=Args}] ->
+get_routes (X, Headers, [ {BindingOrder, _, BindingType, [MainDest], Args, []} | R ], Res) ->
+    case BindingType of
+        all ->
             case headers_match_all (Args, Headers) of
-                true -> get_routes (X, Headers, R, [Dest | Res]);
+                true -> get_routes (X, Headers, R, [ MainDest | Res]);
                 _ -> get_routes (X, Headers, R, Res)
             end;
-        %% Binding type is any
-        [#headers_bindings{destinations=Dest, binding_type=any, compiled_args=Args}] ->
+        any ->
             case headers_match_any (Args, Headers) of
-                true -> get_routes (X, Headers, R, [Dest | Res]);
+                true -> get_routes (X, Headers, R, [ MainDest | Res]);
                 _ -> get_routes (X, Headers, R, Res)
             end
     end.
@@ -148,36 +147,44 @@ get_match_operators([ {<<"x-", _/binary>>, _, _} | N ], Res) ->
 get_match_operators([ {K, _, V} | N ], Res) ->
     get_match_operators (N, [ {K, eq, V} | Res]).
 
+get_binding_order(Binding) ->
+    ?DEFAULT_BINDING_ORDER.
 
 add_binding(transaction, #exchange{name = #resource{virtual_host = VHost}} = X, BindingToAdd = #binding{destination = MainDest, args = BindingArgs}) ->
+    io:format("Add avec !", []),
 % A binding have now an Id; part of the mnesia key table too
     BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
+    BindingOrder = get_binding_order(BindingToAdd),
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
     MatchOperators = get_match_operators (BindingArgs, []),
-% Store the new exchange's bindingId
-    NewBindingRecord = #headers_bindings_keys{exchange = X, binding_id = {?DEFAULT_BINDING_ORDER,BindingId}},
-    ok = mnesia:write (rabbit_headers_bindings_keys, NewBindingRecord, write),
-% Store the new binding details
-    NewBindingDetails = #headers_bindings{exch_bind = {X, {?DEFAULT_BINDING_ORDER, BindingId}}, binding_type = BindingType, destinations = MainDest, compiled_args = rabbit_misc:sort_field_table(MatchOperators)},
-    ok = mnesia:write (rabbit_headers_bindings, NewBindingDetails, write),
-    %% Because ordered_bag does not exist, we need to reorder all bindings here
-    %%  so that we don't need to sort them again in route/2 !
-    OrderedBindings = lists:sort (mnesia:read (rabbit_headers_bindings_keys, X)),
-    lists:foreach (fun(R) -> mnesia:delete_object (rabbit_headers_bindings_keys, R, write) end, OrderedBindings),
-    lists:foreach (fun(R) -> ok = mnesia:write (rabbit_headers_bindings_keys, R, write) end, OrderedBindings);
-add_binding(_Tx, _X, _B) -> ok.
+
+    CurrentOrderedBindings = case mnesia:read (rabbit_headers_bindings2, X, write) of
+        [] -> [];
+        [#headers_bindings2{exchange = X, bindings = E}] -> E
+    end,
+    NewBinding = {BindingOrder, BindingId, BindingType, [MainDest], rabbit_misc:sort_field_table(MatchOperators), []},
+    NewBindings = lists:keysort(1, [ NewBinding | CurrentOrderedBindings]),
+    NewRecord = #headers_bindings2{exchange = X, bindings = NewBindings},
+    ok = mnesia:write (rabbit_headers_bindings2, NewRecord, write);
+add_binding(_Tx, _X, _B) ->
+    io:format("Add sans !", []),
+    ok.
 
 
 remove_bindings(transaction, X, Bs) ->
-    BindingsIDs_todel = [ {?DEFAULT_BINDING_ORDER, crypto:hash(md5,term_to_binary(Binding)) } || Binding=#binding{args=Args} <- Bs ],
+    io:format("Remove avec !", []),
+    CurrentOrderedBindings = case mnesia:read (rabbit_headers_bindings2, X, write) of
+        [] -> [];
+        [#headers_bindings2{exchange = X, bindings = E}] -> E
+    end,
+    BindingIdHashesToDelete = [ crypto:hash (md5, term_to_binary(B)) || B <- Bs],
+    NewOrderedBindings = [ Bind || Bind=[_,BId,_,_,_,_] <- CurrentOrderedBindings, lists:member(BId, BindingIdHashesToDelete) == false],
+    NewRecord = #headers_bindings2{exchange = X, bindings = NewOrderedBindings},
+    ok = mnesia:write (rabbit_headers_bindings2, NewRecord, write);
+remove_bindings(_Tx, _X, _Bs) ->
+    io:format("Remove sans !", []),
+    ok.
 
-    lists:foreach (fun({Order,BindingID_todel}) -> mnesia:delete ({ rabbit_headers_bindings, { X, {Order, BindingID_todel } } }) end, BindingsIDs_todel),
-    lists:foreach (
-        fun({Order,BindingID_todel}) ->
-            R_todel = #headers_bindings_keys{exchange = X, binding_id = {Order,BindingID_todel}},
-            mnesia:delete_object (rabbit_headers_bindings_keys, R_todel, write)
-        end, BindingsIDs_todel);
-remove_bindings(_Tx, _X, _Bs) -> ok.
 
 validate_binding(_X, #binding{args = Args}) ->
     case rabbit_misc:table_lookup(Args, <<"x-match">>) of

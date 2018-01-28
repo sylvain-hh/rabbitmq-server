@@ -340,6 +340,12 @@ definitions() ->
         {attributes, record_info(fields, headers_bindings)},
         {type, ordered_set},
         {match, #headers_bindings{_='_'}}]},
+      {rabbit_headers_bindings2,
+       [{record_name, headers_bindings2},
+        {attributes, record_info(fields, headers_bindings2)},
+        {type, set},
+        {match, #headers_bindings2{_='_'}}]},
+
      {rabbit_durable_exchange,
       [{record_name, exchange},
        {attributes, record_info(fields, exchange)},
