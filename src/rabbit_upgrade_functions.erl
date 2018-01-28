@@ -38,8 +38,6 @@
 -rabbit_upgrade({mirrored_supervisor,   mnesia, []}).
 -rabbit_upgrade({topic_trie_node,       mnesia, []}).
 -rabbit_upgrade({headers_bindings,      mnesia, []}).
--rabbit_upgrade({headers_bindings_keys, mnesia, []}).
--rabbit_upgrade({headers_bindings2, mnesia, []}).
 -rabbit_upgrade({runtime_parameters,    mnesia, []}).
 -rabbit_upgrade({exchange_scratches,    mnesia, [exchange_scratch]}).
 -rabbit_upgrade({policy,                mnesia,
@@ -84,8 +82,6 @@
 -spec mirrored_supervisor() -> 'ok'.
 -spec topic_trie_node() -> 'ok'.
 -spec headers_bindings() -> 'ok'.
--spec headers_bindings_keys() -> 'ok'.
--spec headers_bindings2() -> 'ok'.
 -spec runtime_parameters() -> 'ok'.
 -spec policy() -> 'ok'.
 -spec sync_slave_pids() -> 'ok'.
@@ -256,19 +252,9 @@ topic_trie_node() ->
             {attributes, [trie_node, edge_count, binding_count]},
             {type, ordered_set}]).
 
-headers_bindings_keys() ->
-    create(rabbit_headers_bindings_keys,
-           [{record_name, headers_bindings_keys},
-            {attributes, [exchange, binding_id]},
-            {type, bag}]).
 headers_bindings() ->
     create(rabbit_headers_bindings,
            [{record_name, headers_bindings},
-            {attributes, [exch_bind, binding_type, destinations, compiled_args, other_operators]},
-            {type, ordered_set}] ).
-headers_bindings2() ->
-    create(rabbit_headers_bindings2,
-           [{record_name, headers_bindings2},
             {attributes, [exchange, bindings]},
             {type, set}] ).
 

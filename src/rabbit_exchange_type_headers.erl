@@ -51,9 +51,9 @@ route(X, #delivery{message = #basic_message{content = Content}}) ->
                   undefined -> [];
                   H         -> rabbit_misc:sort_field_table(H)
               end,
-    CurrentOrderedBindings = case ets:lookup(rabbit_headers_bindings2, X) of
+    CurrentOrderedBindings = case ets:lookup(rabbit_headers_bindings, X) of
         [] -> [];
-        [#headers_bindings2{exchange = X, bindings = E}] -> E
+        [#headers_bindings{exchange = X, bindings = E}] -> E
     end,
     get_routes (X, Headers, CurrentOrderedBindings, []).
 
@@ -150,39 +150,35 @@ get_match_operators([ {K, _, V} | N ], Res) ->
 get_binding_order(Binding) ->
     ?DEFAULT_BINDING_ORDER.
 
-add_binding(transaction, #exchange{name = #resource{virtual_host = VHost}} = X, BindingToAdd = #binding{destination = MainDest, args = BindingArgs}) ->
-    io:format("Add avec !", []),
+add_binding(transaction, X, BindingToAdd = #binding{destination = MainDest, args = BindingArgs}) ->
 % A binding have now an Id; part of the mnesia key table too
     BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
     BindingOrder = get_binding_order(BindingToAdd),
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
     MatchOperators = get_match_operators (BindingArgs, []),
 
-    CurrentOrderedBindings = case mnesia:read (rabbit_headers_bindings2, X, write) of
+    CurrentOrderedBindings = case mnesia:read (rabbit_headers_bindings, X, write) of
         [] -> [];
-        [#headers_bindings2{exchange = X, bindings = E}] -> E
+        [#headers_bindings{exchange = X, bindings = E}] -> E
     end,
     NewBinding = {BindingOrder, BindingId, BindingType, [MainDest], rabbit_misc:sort_field_table(MatchOperators), []},
     NewBindings = lists:keysort(1, [ NewBinding | CurrentOrderedBindings]),
-    NewRecord = #headers_bindings2{exchange = X, bindings = NewBindings},
-    ok = mnesia:write (rabbit_headers_bindings2, NewRecord, write);
+    NewRecord = #headers_bindings{exchange = X, bindings = NewBindings},
+    ok = mnesia:write (rabbit_headers_bindings, NewRecord, write);
 add_binding(_Tx, _X, _B) ->
-    io:format("Add sans !", []),
     ok.
 
 
 remove_bindings(transaction, X, Bs) ->
-    io:format("Remove avec !", []),
-    CurrentOrderedBindings = case mnesia:read (rabbit_headers_bindings2, X, write) of
+    CurrentOrderedBindings = case mnesia:read (rabbit_headers_bindings, X, write) of
         [] -> [];
-        [#headers_bindings2{exchange = X, bindings = E}] -> E
+        [#headers_bindings{exchange = X, bindings = E}] -> E
     end,
     BindingIdHashesToDelete = [ crypto:hash (md5, term_to_binary(B)) || B <- Bs],
     NewOrderedBindings = [ Bind || Bind=[_,BId,_,_,_,_] <- CurrentOrderedBindings, lists:member(BId, BindingIdHashesToDelete) == false],
-    NewRecord = #headers_bindings2{exchange = X, bindings = NewOrderedBindings},
-    ok = mnesia:write (rabbit_headers_bindings2, NewRecord, write);
+    NewRecord = #headers_bindings{exchange = X, bindings = NewOrderedBindings},
+    ok = mnesia:write (rabbit_headers_bindings, NewRecord, write);
 remove_bindings(_Tx, _X, _Bs) ->
-    io:format("Remove sans !", []),
     ok.
 
 
