@@ -53,7 +53,7 @@ route(X, #delivery{message = #basic_message{content = Content}}) ->
                   undefined -> [];
                   H         -> rabbit_misc:sort_field_table(H)
               end,
-    CurrentOrderedBindings = case ets:lookup(rabbit_headers_bindings, X) of
+    CurrentOrderedBindings = case mnesia:dirty_read(rabbit_headers_bindings, X) of
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
     end,
