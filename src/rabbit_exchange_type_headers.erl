@@ -159,7 +159,7 @@ add_binding(transaction, X, BindingToAdd = #binding{destination = MainDest, args
 
     CurrentOrderedBindings = case mnesia:read (rabbit_headers_bindings, X, write) of
         [] -> [];
-        [#headers_bindings{exchange = X, bindings = E}] -> E
+        [#headers_bindings{bindings = E}] -> E
     end,
     NewBinding = {BindingOrder, BindingId, BindingType, [MainDest], rabbit_misc:sort_field_table(MatchOperators), []},
     NewBindings = lists:keysort(1, [ NewBinding | CurrentOrderedBindings]),
@@ -172,7 +172,7 @@ add_binding(_Tx, _X, _B) ->
 remove_bindings(transaction, X, Bs) ->
     CurrentOrderedBindings = case mnesia:read (rabbit_headers_bindings, X, write) of
         [] -> [];
-        [#headers_bindings{exchange = X, bindings = E}] -> E
+        [#headers_bindings{bindings = E}] -> E
     end,
     BindingIdHashesToDelete = [ crypto:hash (md5, term_to_binary(B)) || B <- Bs],
     NewOrderedBindings = [ Bind || Bind=[_,BId,_,_,_,_] <- CurrentOrderedBindings, lists:member(BId, BindingIdHashesToDelete) == false],
