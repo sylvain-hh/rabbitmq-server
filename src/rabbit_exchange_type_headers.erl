@@ -26,9 +26,6 @@
          remove_bindings/3, assert_args_equivalence/2]).
 -export([info/1, info/2]).
 
-% From now, a binding has an order which is part of the new mnesia key table so that during route process bindings will be read in order
-% PS : I will make this a real useable property in next commits coming soon :)
--define(DEFAULT_BINDING_ORDER, 200).
 
 -rabbit_boot_step({?MODULE,
                    [{description, "exchange type headers"},
@@ -36,6 +33,11 @@
                                    [exchange, <<"headers">>, ?MODULE]}},
                     {requires,    rabbit_registry},
                     {enables,     kernel_ready}]}).
+
+% Now a binding has an order which is part of the new mnesia table used during route/2
+% Will be "per binding" a bit later.
+-define(DEFAULT_BINDING_ORDER, 200).
+
 
 info(_X) -> [].
 info(_X, _) -> [].
@@ -58,7 +60,7 @@ route(X, #delivery{message = #basic_message{content = Content}}) ->
     get_routes (Headers, CurrentOrderedBindings, []).
 
 get_routes (_Headers, [], DestsResult) -> DestsResult;
-get_routes (Headers, [ {BindingOrder, _, BindingType, [MainDest], Args, []} | R ], Res) ->
+get_routes (Headers, [ {_,_, BindingType, [MainDest], Args, []} | R ], Res) ->
     case BindingType of
         all ->
             case headers_match_all (Args, Headers) of
@@ -74,7 +76,8 @@ get_routes (Headers, [ {BindingOrder, _, BindingType, [MainDest], Args, []} | R 
 
 
 %%
-%% Requires message headers to be sorted (bindings are already via add_binding)
+%% Requires message headers to be sorted (bindings are via add_binding)
+%% There is no more type checking; match operators have a {K,Operator,P} pattern
 %%
 
 %% Binding type 'all' checks
@@ -131,8 +134,8 @@ parse_x_match({longstr, <<"any">>}) -> any;
 parse_x_match(_)                    -> all. %% legacy; we didn't validate
 
 
-% get_match_operators : returns the "compiled form" to be stored in mnesia of binding args related to match operators
-% PS : I will make this more interesting in next commits coming soon :)
+% get_match_operators : returns the "compiled form" to be stored in mnesia of binding args related to match operators; will be improved later.
+% the explicit "ex" operator means "must exist", "eq" is "must be equal"
 get_match_operators([], Result) -> Result;
 %% It's not properly specified, but a "no value" in a
 %% pattern field is supposed to mean simple presence of
@@ -143,20 +146,17 @@ get_match_operators([ {K, void, _V} | N ], Res) ->
 % skip all x-* args..
 get_match_operators([ {<<"x-", _/binary>>, _, _} | N ], Res) ->
     get_match_operators (N, Res);
-% for all other cases, the default is value of key K must be equal to V
+% the default rule is value of key K must be equal to V
 get_match_operators([ {K, _, V} | N ], Res) ->
     get_match_operators (N, [ {K, eq, V} | Res]).
 
-get_binding_order(Binding) ->
-    ?DEFAULT_BINDING_ORDER.
 
 add_binding(transaction, X, BindingToAdd = #binding{destination = MainDest, args = BindingArgs}) ->
 % A binding have now an Id; part of the mnesia key table too
     BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
-    BindingOrder = get_binding_order(BindingToAdd),
+    BindingOrder = ?DEFAULT_BINDING_ORDER,
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
     MatchOperators = get_match_operators (BindingArgs, []),
-
     CurrentOrderedBindings = case mnesia:read (rabbit_headers_bindings, X, write) of
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
