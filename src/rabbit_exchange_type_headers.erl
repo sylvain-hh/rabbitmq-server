@@ -45,14 +45,24 @@ description() ->
 
 serialise_events() -> false.
 
+get_dests_and_args(XName) ->
+    MatchHead = #route{binding = #binding{source      = XName,
+                                          destination = '$1',
+                                          args = '$2',
+                                          _           = '_'}},
+    ets:select(rabbit_route, [{MatchHead, [], [['$1', '$2']]}]).
+
+
+
 route(#exchange{name = Name},
       #delivery{message = #basic_message{content = Content}}) ->
     Headers = case (Content#content.properties)#'P_basic'.headers of
                   undefined -> [];
                   H         -> rabbit_misc:sort_field_table(H)
               end,
-    rabbit_router:match_bindings(
-      Name, fun (#binding{args = Spec}) -> headers_match(Spec, Headers) end).
+
+    DestsAndArgs = get_dests_and_args(Name),
+    [ Dest || [Dest, Args] <- DestsAndArgs, headers_match(Args, Headers)].
 
 validate_binding(_X, #binding{args = Args}) ->
     case rabbit_misc:table_lookup(Args, <<"x-match">>) of
