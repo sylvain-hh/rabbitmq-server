@@ -33,10 +33,6 @@
                     {requires,    rabbit_registry},
                     {enables,     kernel_ready}]}).
 
--spec headers_match
-        (rabbit_framing:amqp_table(), rabbit_framing:amqp_table()) ->
-            boolean().
-
 info(_X) -> [].
 info(_X, _) -> [].
 
@@ -51,8 +47,18 @@ route(#exchange{name = Name},
                   undefined -> [];
                   H         -> rabbit_misc:sort_field_table(H)
               end,
-    rabbit_router:match_bindings(
-      Name, fun (#binding{args = Spec}) -> headers_match(Spec, Headers) end).
+    CurrentOrderedBindings = case mnesia:dirty_read(rabbit_headers_bindings, Name) of
+        [] -> [];
+        [#headers_bindings{bindings = E}] -> E
+    end,
+    get_routes (Headers, CurrentOrderedBindings, []).
+
+get_routes (_, [], Dests) -> Dests;
+get_routes (Headers, [ {_, BindingType, Dest, Args} | T ], Dests) ->
+    case headers_match(Args, Headers, true, false, BindingType) of
+        true -> get_routes (Headers, T, [ Dest | Dests]);
+        _    -> get_routes (Headers, T, Dests)
+    end.
 
 validate_binding(_X, #binding{args = Args}) ->
     case rabbit_misc:table_lookup(Args, <<"x-match">>) of
@@ -84,9 +90,6 @@ parse_x_match(_)                    -> all. %% legacy; we didn't validate
 %% In other words: REQUIRES BOTH PATTERN AND DATA TO BE SORTED ASCENDING BY KEY.
 %%                 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 %%
-headers_match(Args, Data) ->
-    MK = parse_x_match(rabbit_misc:table_lookup(Args, <<"x-match">>)),
-    headers_match(Args, Data, true, false, MK).
 
 % A bit less horrendous algorithm :)
 headers_match(_, _, false, _, all) -> false;
@@ -136,9 +139,40 @@ headers_match([{PK, _PT, _PV} | PRest], [{DK, _DT, _DV} | DRest],
 
 validate(_X) -> ok.
 create(_Tx, _X) -> ok.
-delete(_Tx, _X, _Bs) -> ok.
+
+delete(transaction, #exchange{name = XName}, _) ->
+    ok = mnesia:delete (rabbit_headers_bindings, XName, write);
+delete(_, _, _) -> ok.
+
 policy_changed(_X1, _X2) -> ok.
-add_binding(_Tx, _X, _B) -> ok.
-remove_bindings(_Tx, _X, _Bs) -> ok.
+
+add_binding(transaction, #exchange{name = XName}, BindingToAdd = #binding{destination = Dest, args = BindingArgs}) ->
+% BindingId is used to track original binding definition so that it is used when deleting later
+    BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
+% Let's doing that heavy lookup one time only
+    BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
+    CurrentOrderedBindings = case mnesia:read(rabbit_headers_bindings, XName, write) of
+        [] -> [];
+        [#headers_bindings{bindings = E}] -> E
+    end,
+    NewBinding = {BindingId, BindingType, Dest, rabbit_misc:sort_field_table(BindingArgs)},
+    NewBindings = [NewBinding | CurrentOrderedBindings],
+    NewRecord = #headers_bindings{exchange_name = XName, bindings = NewBindings},
+    ok = mnesia:write(rabbit_headers_bindings, NewRecord, write);
+add_binding(_, _, _) ->
+    ok.
+
+remove_bindings(transaction, #exchange{name = XName}, BindingsToDelete) ->
+    CurrentOrderedBindings = case mnesia:read(rabbit_headers_bindings, XName, write) of
+        [] -> [];
+        [#headers_bindings{bindings = E}] -> E
+    end,
+    BindingIdsToDelete = [crypto:hash(md5, term_to_binary(B)) || B <- BindingsToDelete],
+    NewOrderedBindings = [Bind || Bind={BId,_,_,_} <- CurrentOrderedBindings, lists:member(BId, BindingIdsToDelete) == false],
+    NewRecord = #headers_bindings{exchange_name = XName, bindings = NewOrderedBindings},
+    ok = mnesia:write(rabbit_headers_bindings, NewRecord, write);
+remove_bindings(_, _, _) ->
+    ok.
+
 assert_args_equivalence(X, Args) ->
     rabbit_exchange:assert_args_equivalence(X, Args).
