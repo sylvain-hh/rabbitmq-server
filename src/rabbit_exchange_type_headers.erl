@@ -51,13 +51,18 @@ route(#exchange{name = Name},
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
     end,
-    get_routes (Headers, CurrentOrderedBindings, []).
+    get_routes(Headers, CurrentOrderedBindings, []).
 
-get_routes (_, [], Dests) -> Dests;
-get_routes (Headers, [ {_, BindingType, Dest, Args} | T ], Dests) ->
-    case headers_match(Args, Headers, true, false, BindingType) of
-        true -> get_routes (Headers, T, [ Dest | Dests]);
-        _    -> get_routes (Headers, T, Dests)
+get_routes(_, [], Dests) -> Dests;
+get_routes(Headers, [ {_, all, Dest, Args} | T ], Dests) ->
+    case headers_match_all(Args, Headers) of
+        true -> get_routes(Headers, T, [ Dest | Dests]);
+        _    -> get_routes(Headers, T, Dests)
+    end;
+get_routes(Headers, [ {_, any, Dest, Args} | T ], Dests) ->
+    case headers_match_any(Args, Headers) of
+        true -> get_routes(Headers, T, [ Dest | Dests]);
+        _    -> get_routes(Headers, T, Dests)
     end.
 
 validate_binding(_X, #binding{args = Args}) ->
@@ -81,60 +86,83 @@ parse_x_match({longstr, <<"all">>}) -> all;
 parse_x_match({longstr, <<"any">>}) -> any;
 parse_x_match(_)                    -> all. %% legacy; we didn't validate
 
-%% Horrendous matching algorithm. Depends for its merge-like
-%% (linear-time) behaviour on the lists:keysort
-%% (rabbit_misc:sort_field_table) that route/1 and
-%% rabbit_binding:{add,remove}/2 do.
 %%
-%%                 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-%% In other words: REQUIRES BOTH PATTERN AND DATA TO BE SORTED ASCENDING BY KEY.
-%%                 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+%% !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+%% REQUIRES BOTH PATTERN AND DATA TO BE SORTED ASCENDING BY KEY.
+%% !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 %%
 
-% A bit less horrendous algorithm :)
-headers_match(_, _, false, _, all) -> false;
-headers_match(_, _, _, true, any) -> true;
+%% Binding type 'all' match
 
-% No more bindings, return current state
-headers_match([], _Data, AllMatch, _AnyMatch, all) -> AllMatch;
-headers_match([], _Data, _AllMatch, AnyMatch, any) -> AnyMatch;
+% No more match operator to check; return true
+headers_match_all([], _) -> true;
+% No more message header but still match operator to check; return false
+headers_match_all(_, []) -> false;
+% Current header key not in match operators; go next header with current match operator
+headers_match_all(BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
+    when BK > HK -> headers_match_all(BCur, HNext);
+% Current match operator does not exist in message; return false
+headers_match_all([{BK, _, _} | _], [{HK, _, _} | _])
+    when BK < HK -> false;
+%
+% From here, BK == HK (keys are the same)
+%
+% Current values must match and do match; ok go next
+headers_match_all([{_, eq, BV} | BNext], [{_, _, HV} | HNext])
+    when BV == HV -> headers_match_all(BNext, HNext);
+% Current values must match but do not match; return false
+headers_match_all([{_, eq, _} | _], _) -> false;
+% Current header key must exist; ok go next
+headers_match_all([{_, ex, _} | BNext], [ _ | HNext]) ->
+    headers_match_all(BNext, HNext).
 
-% Delete bindings starting with x-
-headers_match([{<<"x-", _/binary>>, _PT, _PV} | PRest], Data,
-              AllMatch, AnyMatch, MatchKind) ->
-    headers_match(PRest, Data, AllMatch, AnyMatch, MatchKind);
 
-% No more data, but still bindings, false with all
-headers_match(_Pattern, [], _AllMatch, AnyMatch, MatchKind) ->
-    headers_match([], [], false, AnyMatch, MatchKind);
+%% Binding type 'any' match
 
-% Data key header not in binding, go next data
-headers_match(Pattern = [{PK, _PT, _PV} | _], [{DK, _DT, _DV} | DRest],
-              AllMatch, AnyMatch, MatchKind) when PK > DK ->
-    headers_match(Pattern, DRest, AllMatch, AnyMatch, MatchKind);
+% No more match operator to check; return false
+headers_match_any([], _) -> false;
+% No more message header but still match operator to check; return false
+headers_match_any(_, []) -> false;
+% Current header key not in match operators; go next header with current match operator
+headers_match_any(BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
+    when BK > HK -> headers_match_any(BCur, HNext);
+% Current binding key does not exist in message; go next binding
+headers_match_any([{BK, _, _} | BNext], HCur = [{HK, _, _} | _])
+    when BK < HK -> headers_match_any(BNext, HCur);
+%
+% From here, BK == HK
+%
+% Current values must match and do match; return true
+headers_match_any([{_, eq, BV} | _], [{_, _, HV} | _]) when BV == HV -> true;
+% Current header key must exist; return true
+headers_match_any([{_, ex, _} | _], _) -> true;
+% No match yet; go next
+headers_match_any([_ | BNext], HCur) ->
+    headers_match_any(BNext, HCur).
 
-% Binding key header not in data, false with all, go next binding
-headers_match([{PK, _PT, _PV} | PRest], Data = [{DK, _DT, _DV} | _],
-              _AllMatch, AnyMatch, MatchKind) when PK < DK ->
-    headers_match(PRest, Data, false, AnyMatch, MatchKind);
 
+get_match_operators(BindingArgs) ->
+    MatchOperators = get_match_operators(BindingArgs, []),
+    rabbit_misc:sort_field_table(MatchOperators).
+
+get_match_operators([], Result) -> Result;
 %% It's not properly specified, but a "no value" in a
 %% pattern field is supposed to mean simple presence of
 %% the corresponding data field. I've interpreted that to
 %% mean a type of "void" for the pattern field.
-headers_match([{PK, void, _PV} | PRest], [{DK, _DT, _DV} | DRest],
-              AllMatch, _AnyMatch, MatchKind) when PK == DK ->
-    headers_match(PRest, DRest, AllMatch, true, MatchKind);
-
-% Complete match, true with any, go next
-headers_match([{PK, _PT, PV} | PRest], [{DK, _DT, DV} | DRest],
-              AllMatch, _AnyMatch, MatchKind) when PK == DK andalso PV == DV ->
-    headers_match(PRest, DRest, AllMatch, true, MatchKind);
-
-% Value does not match, false with all, go next
-headers_match([{PK, _PT, _PV} | PRest], [{DK, _DT, _DV} | DRest],
-              _AllMatch, AnyMatch, MatchKind) when PK == DK ->
-    headers_match(PRest, DRest, false, AnyMatch, MatchKind).
+% the match operator is 'ex' (like in << must EXist >>)
+get_match_operators([ {K, void, _V} | T ], Res) ->
+    get_match_operators (T, [ {K, ex, nil} | Res]);
+%
+% Maybe should we consider instead a "no value" as beeing a real no value of type longstr ?
+% In other words, from where does the "void" type appears ?
+%
+% skip all x-* args..
+get_match_operators([ {<<"x-", _/binary>>, _, _} | T ], Res) ->
+    get_match_operators (T, Res);
+% for all other cases, the match operator is 'eq'
+get_match_operators([ {K, _, V} | T ], Res) ->
+    get_match_operators (T, [ {K, eq, V} | Res]).
 
 
 validate(_X) -> ok.
@@ -151,11 +179,12 @@ add_binding(transaction, #exchange{name = XName}, BindingToAdd = #binding{destin
     BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
 % Let's doing that heavy lookup one time only
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
+    MatchOperators = get_match_operators(BindingArgs),
     CurrentOrderedBindings = case mnesia:read(rabbit_headers_bindings, XName, write) of
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
     end,
-    NewBinding = {BindingId, BindingType, Dest, rabbit_misc:sort_field_table(BindingArgs)},
+    NewBinding = {BindingId, BindingType, Dest, MatchOperators},
     NewBindings = [NewBinding | CurrentOrderedBindings],
     NewRecord = #headers_bindings{exchange_name = XName, bindings = NewBindings},
     ok = mnesia:write(rabbit_headers_bindings, NewRecord, write);
