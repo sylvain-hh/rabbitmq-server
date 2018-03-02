@@ -122,7 +122,24 @@ headers_match_all([{_, eq, _} | _], _) -> false;
 headers_match_all([{_, nx, _} | _], _) -> false;
 % Current header key must exist; ok go next
 headers_match_all([{_, ex, _} | BNext], [ _ | HNext]) ->
-    headers_match_all(BNext, HNext).
+    headers_match_all(BNext, HNext);
+% <= < = != > >=
+headers_match_all([{_, ne, BV} | BNext], HCur = [{_, _, HV} | _])
+    when BV /= HV -> headers_match_all(BNext, HCur);
+headers_match_all([{_, ne, _} | _], _) -> false;
+headers_match_all([{_, gt, BV} | BNext], HCur = [{_, _, HV} | _])
+    when HV > BV -> headers_match_all(BNext, HCur);
+headers_match_all([{_, gt, _} | _], _) -> false;
+headers_match_all([{_, ge, BV} | BNext], HCur = [{_, _, HV} | _])
+    when HV >= BV -> headers_match_all(BNext, HCur);
+headers_match_all([{_, ge, _} | _], _) -> false;
+headers_match_all([{_, lt, BV} | BNext], HCur = [{_, _, HV} | _])
+    when HV < BV -> headers_match_all(BNext, HCur);
+headers_match_all([{_, lt, _} | _], _) -> false;
+headers_match_all([{_, le, BV} | BNext], HCur = [{_, _, HV} | _])
+    when HV =< BV -> headers_match_all(BNext, HCur);
+headers_match_all([{_, le, _} | _], _) -> false.
+
 
 
 %% Binding type 'any' match
@@ -149,6 +166,11 @@ headers_match_any([{BK, _, _} | BNext], HCur = [{HK, _, _} | _])
 headers_match_any([{_, eq, BV} | _], [{_, _, HV} | _]) when BV == HV -> true;
 % Current header key must exist; return true
 headers_match_any([{_, ex, _} | _], _) -> true;
+headers_match_any([{_, ne, BV} | _], [{_, _, HV} | _]) when HV /= BV -> true;
+headers_match_any([{_, gt, BV} | _], [{_, _, HV} | _]) when HV > BV -> true;
+headers_match_any([{_, ge, BV} | _], [{_, _, HV} | _]) when HV >= BV -> true;
+headers_match_any([{_, lt, BV} | _], [{_, _, HV} | _]) when HV < BV -> true;
+headers_match_any([{_, le, BV} | _], [{_, _, HV} | _]) when HV =< BV -> true;
 % No match yet; go next
 headers_match_any([_ | BNext], HCur) ->
     headers_match_any(BNext, HCur).
@@ -174,6 +196,19 @@ get_match_operators([ {<<"x-?ex">>, longstr, K} | Tail ], Res) ->
 % operator "key not exist"
 get_match_operators([ {<<"x-?nx">>, longstr, K} | Tail ], Res) ->
     get_match_operators (Tail, [ {K, nx, nil} | Res]);
+% operators <= < = != > >=
+get_match_operators([ {<<"x-?<= ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_operators (Tail, [ {K, le, V} | Res]);
+get_match_operators([ {<<"x-?< ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_operators (Tail, [ {K, lt, V} | Res]);
+get_match_operators([ {<<"x-?= ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_operators (Tail, [ {K, eq, V} | Res]);
+get_match_operators([ {<<"x-?!= ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_operators (Tail, [ {K, ne, V} | Res]);
+get_match_operators([ {<<"x-?> ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_operators (Tail, [ {K, gt, V} | Res]);
+get_match_operators([ {<<"x-?>= ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_operators (Tail, [ {K, ge, V} | Res]);
 % skip all x-* args..
 get_match_operators([ {<<"x-", _/binary>>, _, _} | T ], Res) ->
     get_match_operators (T, Res);
