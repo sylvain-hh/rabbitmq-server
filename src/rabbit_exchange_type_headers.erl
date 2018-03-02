@@ -96,11 +96,17 @@ parse_x_match(_)                    -> all. %% legacy; we didn't validate
 
 % No more match operator to check; return true
 headers_match_all([], _) -> true;
+% Purge nx op on no data as all these are true
+headers_match_all([{_, nx, _} | BNext], []) ->
+    headers_match_all(BNext, []);
 % No more message header but still match operator to check; return false
 headers_match_all(_, []) -> false;
 % Current header key not in match operators; go next header with current match operator
 headers_match_all(BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
     when BK > HK -> headers_match_all(BCur, HNext);
+% Current binding key must not exist in data, go next binding
+headers_match_all([{BK, nx, _} | BNext], HCur = [{HK, _, _} | _])
+    when BK < HK -> headers_match_all(BNext, HCur);
 % Current match operator does not exist in message; return false
 headers_match_all([{BK, _, _} | _], [{HK, _, _} | _])
     when BK < HK -> false;
@@ -112,6 +118,8 @@ headers_match_all([{_, eq, BV} | BNext], [{_, _, HV} | HNext])
     when BV == HV -> headers_match_all(BNext, HNext);
 % Current values must match but do not match; return false
 headers_match_all([{_, eq, _} | _], _) -> false;
+% Key must not exist, return false
+headers_match_all([{_, nx, _} | _], _) -> false;
 % Current header key must exist; ok go next
 headers_match_all([{_, ex, _} | BNext], [ _ | HNext]) ->
     headers_match_all(BNext, HNext).
@@ -121,11 +129,16 @@ headers_match_all([{_, ex, _} | BNext], [ _ | HNext]) ->
 
 % No more match operator to check; return false
 headers_match_any([], _) -> false;
+% On no data left, only nx operator can return true
+headers_match_any([{_, nx, _} | _], []) -> true;
 % No more message header but still match operator to check; return false
 headers_match_any(_, []) -> false;
 % Current header key not in match operators; go next header with current match operator
 headers_match_any(BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
     when BK > HK -> headers_match_any(BCur, HNext);
+% nx operator : current binding key must not exist in data, return true
+headers_match_any([{BK, nx, _} | _], [{HK, _, _} | _])
+    when BK < HK -> true;
 % Current binding key does not exist in message; go next binding
 headers_match_any([{BK, _, _} | BNext], HCur = [{HK, _, _} | _])
     when BK < HK -> headers_match_any(BNext, HCur);
@@ -158,6 +171,9 @@ get_match_operators([ {K, void, _V} | T ], Res) ->
 % the new match operator is 'ex' (like in << must EXist >>)
 get_match_operators([ {<<"x-?ex">>, longstr, K} | Tail ], Res) ->
     get_match_operators (Tail, [ {K, ex, nil} | Res]);
+% operator "key not exist"
+get_match_operators([ {<<"x-?nx">>, longstr, K} | Tail ], Res) ->
+    get_match_operators (Tail, [ {K, nx, nil} | Res]);
 % skip all x-* args..
 get_match_operators([ {<<"x-", _/binary>>, _, _} | T ], Res) ->
     get_match_operators (T, Res);
