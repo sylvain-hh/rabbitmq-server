@@ -54,16 +54,27 @@ route(#exchange{name = Name},
     get_routes(Headers, CurrentOrderedBindings, []).
 
 get_routes(_, [], Dests) -> Dests;
+% Binding type is 'all'
 get_routes(Headers, [ {_, _, all, Dest, Args} | T ], Dests) ->
-    case headers_match_all(Args, Headers) of
-        true -> get_routes(Headers, T, [ Dest | Dests]);
-        _    -> get_routes(Headers, T, Dests)
+    case lists:member(Dest, Dests) of
+        true -> get_routes(Headers, T, Dests);
+        _    ->
+            case headers_match_all(Args, Headers) of
+                true -> get_routes(Headers, T, [ Dest | Dests]);
+                _    -> get_routes(Headers, T, Dests)
+            end
     end;
+% Binding type is 'any'
 get_routes(Headers, [ {_, _, any, Dest, Args} | T ], Dests) ->
-    case headers_match_any(Args, Headers) of
-        true -> get_routes(Headers, T, [ Dest | Dests]);
-        _    -> get_routes(Headers, T, Dests)
+    case lists:member(Dest, Dests) of
+        true -> get_routes(Headers, T, Dests);
+        _    ->
+            case headers_match_any(Args, Headers) of
+                true -> get_routes(Headers, T, [ Dest | Dests]);
+                _    -> get_routes(Headers, T, Dests)
+            end
     end.
+
 
 validate_binding(_X, #binding{args = Args}) ->
     case rabbit_misc:table_lookup(Args, <<"x-match">>) of
