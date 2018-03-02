@@ -150,19 +150,32 @@ get_match_operators([], Result) -> Result;
 %% pattern field is supposed to mean simple presence of
 %% the corresponding data field. I've interpreted that to
 %% mean a type of "void" for the pattern field.
-% the match operator is 'ex' (like in << must EXist >>)
-get_match_operators([ {K, void, _V} | T ], Res) ->
-    get_match_operators (T, [ {K, ex, nil} | Res]);
 %
 % Maybe should we consider instead a "no value" as beeing a real no value of type longstr ?
 % In other words, from where does the "void" type appears ?
-%
+get_match_operators([ {K, void, _V} | T ], Res) ->
+    get_match_operators (T, [ {K, ex, nil} | Res]);
+% the new match operator is 'ex' (like in << must EXist >>)
+get_match_operators([ {<<"x-?ex">>, longstr, K} | Tail ], Res) ->
+    get_match_operators (Tail, [ {K, ex, nil} | Res]);
 % skip all x-* args..
 get_match_operators([ {<<"x-", _/binary>>, _, _} | T ], Res) ->
     get_match_operators (T, Res);
 % for all other cases, the match operator is 'eq'
 get_match_operators([ {K, _, V} | T ], Res) ->
     get_match_operators (T, [ {K, eq, V} | Res]).
+
+
+%% Flatten one level for list of values (array)
+flatten_binding_args(Args) ->
+        flatten_binding_args(Args, []).
+
+flatten_binding_args([], Result) -> Result;
+flatten_binding_args ([ {K, array, Vs} | Tail ], Result) ->
+        Res = [ { K, T, V } || {T, V} <- Vs ],
+        flatten_binding_args (Tail, lists:append ([ Res , Result ]));
+flatten_binding_args ([ {K, T, V} | Tail ], Result) ->
+        flatten_binding_args (Tail, [ {K, T, V} | Result ]).
 
 
 validate(_X) -> ok.
@@ -179,7 +192,8 @@ add_binding(transaction, #exchange{name = XName}, BindingToAdd = #binding{destin
     BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
 % Let's doing that heavy lookup one time only
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
-    MatchOperators = get_match_operators(BindingArgs),
+    FlattenedBindindArgs = flatten_binding_args(BindingArgs),
+    MatchOperators = get_match_operators(FlattenedBindindArgs),
     CurrentOrderedBindings = case mnesia:read(rabbit_headers_bindings, XName, write) of
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
