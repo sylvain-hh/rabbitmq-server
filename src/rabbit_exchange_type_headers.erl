@@ -54,12 +54,12 @@ route(#exchange{name = Name},
     get_routes(Headers, CurrentOrderedBindings, []).
 
 get_routes(_, [], Dests) -> Dests;
-get_routes(Headers, [ {_, all, Dest, Args} | T ], Dests) ->
+get_routes(Headers, [ {_, _, all, Dest, Args} | T ], Dests) ->
     case headers_match_all(Args, Headers) of
         true -> get_routes(Headers, T, [ Dest | Dests]);
         _    -> get_routes(Headers, T, Dests)
     end;
-get_routes(Headers, [ {_, any, Dest, Args} | T ], Dests) ->
+get_routes(Headers, [ {_, _, any, Dest, Args} | T ], Dests) ->
     case headers_match_any(Args, Headers) of
         true -> get_routes(Headers, T, [ Dest | Dests]);
         _    -> get_routes(Headers, T, Dests)
@@ -67,8 +67,8 @@ get_routes(Headers, [ {_, any, Dest, Args} | T ], Dests) ->
 
 validate_binding(_X, #binding{args = Args}) ->
     case rabbit_misc:table_lookup(Args, <<"x-match">>) of
-        {longstr, <<"all">>} -> ok;
-        {longstr, <<"any">>} -> ok;
+        {longstr, <<"all">>} -> validate_binding_order(Args);
+        {longstr, <<"any">>} -> validate_binding_order(Args);
         {longstr, Other}     -> {error,
                                  {binding_invalid,
                                   "Invalid x-match field value ~p; "
@@ -77,8 +77,19 @@ validate_binding(_X, #binding{args = Args}) ->
                                  {binding_invalid,
                                   "Invalid x-match field type ~p (value ~p); "
                                   "expected longstr", [Type, Other]}};
-        undefined            -> ok %% [0]
+        undefined            -> validate_binding_order(Args)
     end.
+
+validate_binding_order(Args) ->
+    case rabbit_misc:table_lookup(Args, <<"x-match-order">>) of
+        undefined     -> ok;
+        {number, _}   -> ok;
+        {Type, _} -> {error,
+                          {binding_invalid,
+                           "Invalid x-match-order field type ~p; "
+                                  "expected number", [Type]}}
+    end.
+
 %% [0] spec is vague on whether it can be omitted but in practice it's
 %% useful to allow people to do this
 
@@ -243,14 +254,15 @@ add_binding(transaction, #exchange{name = XName}, BindingToAdd = #binding{destin
     BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
 % Let's doing that heavy lookup one time only
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
+    BindingOrder = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match-order">>)),
     FlattenedBindindArgs = flatten_binding_args(BindingArgs),
     MatchOperators = get_match_operators(FlattenedBindindArgs),
     CurrentOrderedBindings = case mnesia:read(rabbit_headers_bindings, XName, write) of
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
     end,
-    NewBinding = {BindingId, BindingType, Dest, MatchOperators},
-    NewBindings = [NewBinding | CurrentOrderedBindings],
+    NewBinding = {BindingOrder, BindingId, BindingType, Dest, MatchOperators},
+    NewBindings = lists:keysort(1, [NewBinding | CurrentOrderedBindings]),
     NewRecord = #headers_bindings{exchange_name = XName, bindings = NewBindings},
     ok = mnesia:write(rabbit_headers_bindings, NewRecord, write);
 add_binding(_, _, _) ->
@@ -262,7 +274,7 @@ remove_bindings(transaction, #exchange{name = XName}, BindingsToDelete) ->
         [#headers_bindings{bindings = E}] -> E
     end,
     BindingIdsToDelete = [crypto:hash(md5, term_to_binary(B)) || B <- BindingsToDelete],
-    NewOrderedBindings = [Bind || Bind={BId,_,_,_} <- CurrentOrderedBindings, lists:member(BId, BindingIdsToDelete) == false],
+    NewOrderedBindings = [Bind || Bind={_,BId,_,_,_} <- CurrentOrderedBindings, lists:member(BId, BindingIdsToDelete) == false],
     NewRecord = #headers_bindings{exchange_name = XName, bindings = NewOrderedBindings},
     ok = mnesia:write(rabbit_headers_bindings, NewRecord, write);
 remove_bindings(_, _, _) ->
