@@ -51,27 +51,30 @@ route(#exchange{name = Name},
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
     end,
-    get_routes(Headers, CurrentOrderedBindings, []).
+    get_routes(Headers, CurrentOrderedBindings, 0, []).
 
-get_routes(_, [], Dests) -> Dests;
+get_routes(_, [], _, Dests) -> Dests;
+% Jump to the next binding satisfying the last goto operator
+get_routes(Headers, [ {Order, _, _, _, _, _} | T ], GotoOrder, Dests) when GotoOrder > Order ->
+    get_routes(Headers, T, GotoOrder, Dests);
 % Binding type is 'all'
-get_routes(Headers, [ {_, _, all, Dest, Args} | T ], Dests) ->
+get_routes(Headers, [ {_, {GotoOnTrue, GotoOnFalse}, _, all, Dest, Args} | T ], GotoOrder, Dests) ->
     case lists:member(Dest, Dests) of
-        true -> get_routes(Headers, T, Dests);
+        true -> get_routes(Headers, T, GotoOrder, Dests);
         _    ->
             case headers_match_all(Args, Headers) of
-                true -> get_routes(Headers, T, [ Dest | Dests]);
-                _    -> get_routes(Headers, T, Dests)
+                true -> get_routes(Headers, T, GotoOnTrue, [ Dest | Dests]);
+                _    -> get_routes(Headers, T, GotoOnFalse, Dests)
             end
     end;
 % Binding type is 'any'
-get_routes(Headers, [ {_, _, any, Dest, Args} | T ], Dests) ->
+get_routes(Headers, [ {_, {GotoOnTrue, GotoOnFalse}, _, any, Dest, Args} | T ], GotoOrder, Dests) ->
     case lists:member(Dest, Dests) of
-        true -> get_routes(Headers, T, Dests);
+        true -> get_routes(Headers, T, GotoOrder, Dests);
         _    ->
             case headers_match_any(Args, Headers) of
-                true -> get_routes(Headers, T, [ Dest | Dests]);
-                _    -> get_routes(Headers, T, Dests)
+                true -> get_routes(Headers, T, GotoOnTrue, [ Dest | Dests]);
+                _    -> get_routes(Headers, T, GotoOnFalse, Dests)
             end
     end.
 
@@ -94,7 +97,7 @@ validate_binding(_X, #binding{args = Args}) ->
 validate_binding_order(Args) ->
     case rabbit_misc:table_lookup(Args, <<"x-match-order">>) of
         undefined     -> ok;
-        {number, _}   -> ok;
+        {long, _}   -> ok;
         {Type, _} -> {error,
                           {binding_invalid,
                            "Invalid x-match-order field type ~p; "
@@ -239,6 +242,22 @@ get_match_operators([ {K, _, V} | T ], Res) ->
     get_match_operators (T, [ {K, eq, V} | Res]).
 
 
+get_goto_operators([], Result) -> Result;
+get_goto_operators([{<<"x-match-goto-ontrue">>, long, N} | T], {_, GotoOnFalse}) ->
+    get_goto_operators(T, {N, GotoOnFalse});
+get_goto_operators([{<<"x-match-goto-onfalse">>, long, N} | T], {GotoOnTrue, _}) ->
+    get_goto_operators(T, {GotoOnTrue, N});
+get_goto_operators([_ | T], {GotoOnTrue, GotoOnFalse}) ->
+    get_goto_operators(T, {GotoOnTrue, GotoOnFalse}).
+
+
+get_binding_order(Args) ->
+    case rabbit_misc:table_lookup(Args, <<"x-match-order">>) of
+        undefined     -> 200;
+        {long, Order} -> Order
+    end.
+
+
 %% Flatten one level for list of values (array)
 flatten_binding_args(Args) ->
         flatten_binding_args(Args, []).
@@ -265,14 +284,15 @@ add_binding(transaction, #exchange{name = XName}, BindingToAdd = #binding{destin
     BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
 % Let's doing that heavy lookup one time only
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
-    BindingOrder = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match-order">>)),
+    BindingOrder = get_binding_order(BindingArgs),
+    GotoOperators = get_goto_operators(BindingArgs, {0, 0}),
     FlattenedBindindArgs = flatten_binding_args(BindingArgs),
     MatchOperators = get_match_operators(FlattenedBindindArgs),
     CurrentOrderedBindings = case mnesia:read(rabbit_headers_bindings, XName, write) of
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
     end,
-    NewBinding = {BindingOrder, BindingId, BindingType, Dest, MatchOperators},
+    NewBinding = {BindingOrder, GotoOperators, BindingId, BindingType, Dest, MatchOperators},
     NewBindings = lists:keysort(1, [NewBinding | CurrentOrderedBindings]),
     NewRecord = #headers_bindings{exchange_name = XName, bindings = NewBindings},
     ok = mnesia:write(rabbit_headers_bindings, NewRecord, write);
@@ -285,7 +305,7 @@ remove_bindings(transaction, #exchange{name = XName}, BindingsToDelete) ->
         [#headers_bindings{bindings = E}] -> E
     end,
     BindingIdsToDelete = [crypto:hash(md5, term_to_binary(B)) || B <- BindingsToDelete],
-    NewOrderedBindings = [Bind || Bind={_,BId,_,_,_} <- CurrentOrderedBindings, lists:member(BId, BindingIdsToDelete) == false],
+    NewOrderedBindings = [Bind || Bind={_,_,BId,_,_,_} <- CurrentOrderedBindings, lists:member(BId, BindingIdsToDelete) == false],
     NewRecord = #headers_bindings{exchange_name = XName, bindings = NewOrderedBindings},
     ok = mnesia:write(rabbit_headers_bindings, NewRecord, write);
 remove_bindings(_, _, _) ->
