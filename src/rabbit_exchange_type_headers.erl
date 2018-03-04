@@ -54,15 +54,15 @@ route(#exchange{name = Name},
     get_routes(Headers, CurrentOrderedBindings, 0, []).
 
 get_routes(_, [], _, ResDests) -> ResDests;
-get_routes(Headers, [ {<< _:10, BindingType:4/integer, 0:23, _/bits >>, _, Dest, Args} | T ], 0, ResDests) ->
+get_routes(Headers, [ {<< _:10, BindingType:4, 0:23, _/bits >>, _, Dest, Args} | T ], 0, ResDests) ->
     case headers_match(BindingType, Args, Headers) of
         true -> get_routes(Headers, T, 0, [Dest | ResDests]);
            _ -> get_routes(Headers, T, 0, ResDests)
     end;
 % Jump to the next binding satisfying the last goto operator
-get_routes(Headers, [ {<< Order:10/integer, _/bits >>, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
+get_routes(Headers, [ {<< Order:10, _/bits >>, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
     get_routes(Headers, T, GotoOrder, ResDests);
-get_routes(Headers, [ {<< _:10/integer, BindingType:4/integer, GOT:10/integer, GOF:10/integer, StopT:1/integer, StopF:1/integer, ForceMatch:1/integer, _/bits >>, {DAT, DAF, DDT, DDF}, Dest, Args, _} | T ], GotoOrder, ResDests) ->
+get_routes(Headers, [ {<< _:10, BindingType:4, GOT:10, GOF:10, StopT:1, StopF:1, ForceMatch:1, _/bits >>, {DAT, DAF, DDT, DDF}, Dest, Args} | T ], GotoOrder, ResDests) ->
     case {lists:member(Dest, ResDests), ForceMatch} of
         {true, 0} -> get_routes(Headers, T, GotoOrder, ResDests);
         _ ->
@@ -346,7 +346,7 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     FlattenedBindindArgs = flatten_binding_args(BindingArgs),
     MatchOperators = get_match_operators(FlattenedBindindArgs),
     {DAT, DAF, DDT, DDF} = get_dests_operators(VHost, FlattenedBindindArgs),
-    Bits = << BindingOrder:10/integer, 0:4/integer, GOT:10/integer, GOF:10/integer, StopT:1/integer, StopF:1/integer, ForceMatch:1/integer, BindingId/binary >>,
+    Bits = << BindingOrder:10, 0:4, GOT:10, GOF:10, StopT:1, StopF:1, ForceMatch:1, BindingId/binary >>,
     CurrentOrderedBindings = case mnesia:read(rabbit_headers_bindings, XName, write) of
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
