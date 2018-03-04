@@ -54,19 +54,19 @@ route(#exchange{name = Name},
     get_routes(Headers, CurrentOrderedBindings, 0, []).
 
 get_routes(_, [], _, ResDests) -> ResDests;
-get_routes(Headers, [ {_, BindingType, Dest, Args, _} | T ], 0, ResDests) ->
+get_routes(Headers, [ {<< _:10, BindingType:4/integer, 0:23, _/bits >>, _, Dest, Args} | T ], 0, ResDests) ->
     case headers_match(BindingType, Args, Headers) of
         true -> get_routes(Headers, T, 0, [Dest | ResDests]);
            _ -> get_routes(Headers, T, 0, ResDests)
     end;
 % Jump to the next binding satisfying the last goto operator
-get_routes(Headers, [ {Order, _, _, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
+get_routes(Headers, [ {<< Order:10/integer, _/bits >>, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
     get_routes(Headers, T, GotoOrder, ResDests);
-get_routes(Headers, [ {_, BindingType, {GOT, GOF, ForceMatch, StopOperators, DAT, DAF, DDT, DDF}, Dest, Args, _} | T ], GotoOrder, ResDests) ->
+get_routes(Headers, [ {<< _:10/integer, BindingType:4/integer, GOT:10/integer, GOF:10/integer, StopT:1/integer, StopF:1/integer, ForceMatch:1/integer, _/bits >>, {DAT, DAF, DDT, DDF}, Dest, Args, _} | T ], GotoOrder, ResDests) ->
     case {lists:member(Dest, ResDests), ForceMatch} of
         {true, 0} -> get_routes(Headers, T, GotoOrder, ResDests);
         _ ->
-            case {headers_match(BindingType, Args, Headers), StopOperators} of
+            case {headers_match(BindingType, Args, Headers), {StopT, StopF}} of
                 {true,{1,_}}  -> lists:subtract(lists:append([[Dest | ResDests], DAT]), DDT);
                 {false,{_,1}} -> lists:subtract(lists:append([ResDests, DAF]), DDF);
                 {true,_}      -> get_routes(Headers, T, GOT, lists:subtract(lists:append([[Dest | ResDests], DAT]),DDT));
@@ -74,9 +74,9 @@ get_routes(Headers, [ {_, BindingType, {GOT, GOF, ForceMatch, StopOperators, DAT
             end
     end.
 
-headers_match(all, Args, Headers) ->
+headers_match(0, Args, Headers) ->
     headers_match_all(Args, Headers);
-headers_match(any, Args, Headers) ->
+headers_match(1, Args, Headers) ->
     headers_match_any(Args, Headers).
 
 
@@ -108,9 +108,9 @@ validate_binding_order(Args) ->
 %% [0] spec is vague on whether it can be omitted but in practice it's
 %% useful to allow people to do this
 
-parse_x_match({longstr, <<"all">>}) -> all;
-parse_x_match({longstr, <<"any">>}) -> any;
-parse_x_match(_)                    -> all. %% legacy; we didn't validate
+parse_x_match({longstr, <<"all">>}) -> 0;
+parse_x_match({longstr, <<"any">>}) -> 1;
+parse_x_match(_)                    -> 0. %% legacy; we didn't validate
 
 %%
 %% !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -341,19 +341,17 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
     BindingOrder = get_binding_order(BindingArgs),
     {GOT, GOF} = get_goto_operators(BindingArgs, {0, 0}),
-    StopOperators = get_stop_operators(BindingArgs, {0, 0}),
+    {StopT, StopF} = get_stop_operators(BindingArgs, {0, 0}),
     ForceMatch = get_forcematch_operator(BindingArgs),
     FlattenedBindindArgs = flatten_binding_args(BindingArgs),
     MatchOperators = get_match_operators(FlattenedBindindArgs),
     {DAT, DAF, DDT, DDF} = get_dests_operators(VHost, FlattenedBindindArgs),
+    Bits = << BindingOrder:10/integer, 0:4/integer, GOT:10/integer, GOF:10/integer, StopT:1/integer, StopF:1/integer, ForceMatch:1/integer, BindingId/binary >>,
     CurrentOrderedBindings = case mnesia:read(rabbit_headers_bindings, XName, write) of
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
     end,
-    NewBinding = case {GOT, GOF, ForceMatch, StopOperators, DAT, DAF, DDT, DDF} of
-        {0, 0, 0, {0, 0}, [], [], [], []} -> {BindingOrder, BindingType, Dest, MatchOperators, BindingId};
-        _ -> {BindingOrder, BindingType, {GOT, GOF, ForceMatch, StopOperators, DAT, DAF, DDT, DDF}, Dest, MatchOperators, BindingId}
-    end,
+    NewBinding = {Bits, {DAT, DAF, DDT, DDF}, Dest, MatchOperators},
     NewBindings = lists:keysort(1, [NewBinding | CurrentOrderedBindings]),
     NewRecord = #headers_bindings{exchange_name = XName, bindings = NewBindings},
     ok = mnesia:write(rabbit_headers_bindings, NewRecord, write);
@@ -366,7 +364,7 @@ remove_bindings(transaction, #exchange{name = XName}, BindingsToDelete) ->
         [#headers_bindings{bindings = E}] -> E
     end,
     BindingIdsToDelete = [crypto:hash(md5, term_to_binary(B)) || B <- BindingsToDelete],
-    NewOrderedBindings = [Bind || Bind={_,_,_,_,_,BId} <- CurrentOrderedBindings, lists:member(BId, BindingIdsToDelete) == false],
+    NewOrderedBindings = [Bind || Bind={<<_:37, BId/binary>>,_,_,_} <- CurrentOrderedBindings, lists:member(BId, BindingIdsToDelete) == false],
     NewRecord = #headers_bindings{exchange_name = XName, bindings = NewOrderedBindings},
     ok = mnesia:write(rabbit_headers_bindings, NewRecord, write);
 remove_bindings(_, _, _) ->
