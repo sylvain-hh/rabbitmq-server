@@ -54,33 +54,30 @@ route(#exchange{name = Name},
     get_routes(Headers, CurrentOrderedBindings, 0, []).
 
 get_routes(_, [], _, ResDests) -> ResDests;
-% Jump to the next binding satisfying the last goto operator
-get_routes(Headers, [ {Order, _, _, _, _, _, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
-    get_routes(Headers, T, GotoOrder, ResDests);
-% Binding type is 'all'
-get_routes(Headers, [ {_, {GotoOnTrue, GotoOnFalse}, StopOnTrueFalse, ForceMatch, _, all, Dest, {DAT, DAF, DDT, DDF}, Args} | T ], GotoOrder, ResDests) ->
-    case {lists:member(Dest, ResDests), ForceMatch} of
-        {true, 0} -> get_routes(Headers, T, GotoOrder, ResDests);
-        _ ->
-            case {headers_match_all(Args, Headers), StopOnTrueFalse} of
-                {true,{1,_}}  -> lists:subtract(lists:append([[Dest | ResDests], DAT]), DDT);
-                {false,{_,1}} -> lists:subtract(lists:append([ResDests, DAF]), DDF);
-                {true,_}      -> get_routes(Headers, T, GotoOnTrue, lists:subtract(lists:append([[Dest | ResDests], DAT]),DDT));
-                {false,_}     -> get_routes(Headers, T, GotoOnFalse, lists:subtract(lists:append([ResDests, DAF]),DDF))
-            end
+get_routes(Headers, [ {_, BindingType, Dest, Args, _} | T ], 0, ResDests) ->
+    case headers_match(BindingType, Args, Headers) of
+        true -> get_routes(Headers, T, 0, [Dest | ResDests]);
+           _ -> get_routes(Headers, T, 0, ResDests)
     end;
-% Binding type is 'any'
-get_routes(Headers, [ {_, {GotoOnTrue, GotoOnFalse}, StopOnTrueFalse, ForceMatch, _, any, Dest, {DAT, DAF, DDT, DDF}, Args} | T ], GotoOrder, ResDests) ->
+% Jump to the next binding satisfying the last goto operator
+get_routes(Headers, [ {Order, _, _, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
+    get_routes(Headers, T, GotoOrder, ResDests);
+get_routes(Headers, [ {_, BindingType, {GOT, GOF, ForceMatch, StopOperators, DAT, DAF, DDT, DDF}, Dest, Args, _} | T ], GotoOrder, ResDests) ->
     case {lists:member(Dest, ResDests), ForceMatch} of
         {true, 0} -> get_routes(Headers, T, GotoOrder, ResDests);
         _ ->
-            case {headers_match_any(Args, Headers), StopOnTrueFalse} of
+            case {headers_match(BindingType, Args, Headers), StopOperators} of
                 {true,{1,_}}  -> lists:subtract(lists:append([[Dest | ResDests], DAT]), DDT);
                 {false,{_,1}} -> lists:subtract(lists:append([ResDests, DAF]), DDF);
-                {true,_}      -> get_routes(Headers, T, GotoOnTrue, lists:subtract(lists:append([[Dest | ResDests], DAT]),DDT));
-                {false,_}     -> get_routes(Headers, T, GotoOnFalse, lists:subtract(lists:append([ResDests, DAF]),DDF))
+                {true,_}      -> get_routes(Headers, T, GOT, lists:subtract(lists:append([[Dest | ResDests], DAT]),DDT));
+                {false,_}     -> get_routes(Headers, T, GOF, lists:subtract(lists:append([ResDests, DAF]),DDF))
             end
     end.
+
+headers_match(all, Args, Headers) ->
+    headers_match_all(Args, Headers);
+headers_match(any, Args, Headers) ->
+    headers_match_any(Args, Headers).
 
 
 validate_binding(_X, #binding{args = Args}) ->
@@ -343,17 +340,20 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
 % Let's doing that heavy lookup one time only
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
     BindingOrder = get_binding_order(BindingArgs),
-    GotoOperators = get_goto_operators(BindingArgs, {0, 0}),
+    {GOT, GOF} = get_goto_operators(BindingArgs, {0, 0}),
     StopOperators = get_stop_operators(BindingArgs, {0, 0}),
-    ForceMatchOperator = get_forcematch_operator(BindingArgs),
+    ForceMatch = get_forcematch_operator(BindingArgs),
     FlattenedBindindArgs = flatten_binding_args(BindingArgs),
     MatchOperators = get_match_operators(FlattenedBindindArgs),
-    DestsOperators = get_dests_operators(VHost, FlattenedBindindArgs),
+    {DAT, DAF, DDT, DDF} = get_dests_operators(VHost, FlattenedBindindArgs),
     CurrentOrderedBindings = case mnesia:read(rabbit_headers_bindings, XName, write) of
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
     end,
-    NewBinding = {BindingOrder, GotoOperators, StopOperators, ForceMatchOperator, BindingId, BindingType, Dest, DestsOperators, MatchOperators},
+    NewBinding = case {GOT, GOF, ForceMatch, StopOperators, DAT, DAF, DDT, DDF} of
+        {0, 0, 0, {0, 0}, [], [], [], []} -> {BindingOrder, BindingType, Dest, MatchOperators, BindingId};
+        _ -> {BindingOrder, BindingType, {GOT, GOF, ForceMatch, StopOperators, DAT, DAF, DDT, DDF}, Dest, MatchOperators, BindingId}
+    end,
     NewBindings = lists:keysort(1, [NewBinding | CurrentOrderedBindings]),
     NewRecord = #headers_bindings{exchange_name = XName, bindings = NewBindings},
     ok = mnesia:write(rabbit_headers_bindings, NewRecord, write);
@@ -366,7 +366,7 @@ remove_bindings(transaction, #exchange{name = XName}, BindingsToDelete) ->
         [#headers_bindings{bindings = E}] -> E
     end,
     BindingIdsToDelete = [crypto:hash(md5, term_to_binary(B)) || B <- BindingsToDelete],
-    NewOrderedBindings = [Bind || Bind={_,_,_,_,BId,_,_,_,_} <- CurrentOrderedBindings, lists:member(BId, BindingIdsToDelete) == false],
+    NewOrderedBindings = [Bind || Bind={_,_,_,_,_,BId} <- CurrentOrderedBindings, lists:member(BId, BindingIdsToDelete) == false],
     NewRecord = #headers_bindings{exchange_name = XName, bindings = NewOrderedBindings},
     ok = mnesia:write(rabbit_headers_bindings, NewRecord, write);
 remove_bindings(_, _, _) ->
