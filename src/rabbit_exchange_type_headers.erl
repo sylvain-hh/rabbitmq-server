@@ -55,16 +55,20 @@ route(#exchange{name = Name},
 
 get_routes(_, [], _, ResDests) -> ordsets:to_list(ResDests);
 get_routes(Headers, [ {_, BindingType, Dest, Args, _} | T ], _, ResDests) ->
-    case ordsets:is_element(Dest, ResDests) of
-        true -> get_routes(Headers, T, 0, ResDests);
-           _ -> case headers_match(BindingType, Args, Headers) of
-                    true -> get_routes(Headers, T, 0, ordsets:add_element(Dest, ResDests));
-                       _ -> get_routes(Headers, T, 0, ResDests)
-                end
+    case headers_match(BindingType, Args, Headers) of
+        true -> get_routes(Headers, T, 0, ordsets:add_element(Dest, ResDests));
+           _ -> get_routes(Headers, T, 0, ResDests)
     end;
 % Jump to the next binding satisfying the last goto operator
 get_routes(Headers, [ {Order, _, _, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
     get_routes(Headers, T, GotoOrder, ResDests);
+get_routes(Headers, [ {_, BindingType, {GOT, GOF, StopOperators}, Dest, Args, _} | T ], _, ResDests) ->
+    case {headers_match(BindingType, Args, Headers), StopOperators} of
+        {true,{1,_}}  -> ordsets:add_element(Dest, ResDests);
+        {false,{_,1}} -> ResDests;
+        {true,_}      -> get_routes(Headers, T, GOT, ordsets:add_element(Dest, ResDests));
+        {false,_}     -> get_routes(Headers, T, GOF, ResDests)
+    end;
 get_routes(Headers, [ {_, BindingType, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF}, Dest, Args, _} | T ], _, ResDests) ->
     case {headers_match(BindingType, Args, Headers), StopOperators} of
         {true,{1,_}}  -> ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT));
@@ -340,6 +344,7 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     end,
     NewBinding = case {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF} of
         {0, 0, {0, 0}, [], [], [], []} -> {BindingOrder, BindingType, Dest, MatchOperators, BindingId};
+        {_, _, _, [], [], [], []} -> {BindingOrder, BindingType, {GOT, GOF, StopOperators}, Dest, MatchOperators, BindingId};
         _ -> {BindingOrder, BindingType, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF}, Dest, MatchOperators, BindingId}
     end,
     NewBindings = lists:keysort(1, [NewBinding | CurrentOrderedBindings]),
