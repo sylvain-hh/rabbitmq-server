@@ -51,23 +51,26 @@ route(#exchange{name = Name},
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
     end,
-    get_routes(Headers, CurrentOrderedBindings, 0, []).
+    get_routes(Headers, CurrentOrderedBindings, 0, ordsets:new()).
 
-get_routes(_, [], _, ResDests) -> ResDests;
+get_routes(_, [], _, ResDests) -> ordsets:to_list(ResDests);
 get_routes(Headers, [ {_, BindingType, Dest, Args, _} | T ], _, ResDests) ->
-    case headers_match(BindingType, Args, Headers) of
-        true -> get_routes(Headers, T, 0, [Dest | ResDests]);
-           _ -> get_routes(Headers, T, 0, ResDests)
+    case ordsets:is_element(Dest, ResDests) of
+        true -> get_routes(Headers, T, 0, ResDests);
+           _ -> case headers_match(BindingType, Args, Headers) of
+                    true -> get_routes(Headers, T, 0, ordsets:add_element(Dest, ResDests));
+                       _ -> get_routes(Headers, T, 0, ResDests)
+                end
     end;
 % Jump to the next binding satisfying the last goto operator
 get_routes(Headers, [ {Order, _, _, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
     get_routes(Headers, T, GotoOrder, ResDests);
 get_routes(Headers, [ {_, BindingType, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF}, Dest, Args, _} | T ], _, ResDests) ->
     case {headers_match(BindingType, Args, Headers), StopOperators} of
-        {true,{1,_}}  -> lists:subtract(lists:append([[Dest | ResDests], DAT]), DDT);
-        {false,{_,1}} -> lists:subtract(lists:append([ResDests, DAF]), DDF);
-        {true,_}      -> get_routes(Headers, T, GOT, lists:subtract(lists:append([[Dest | ResDests], DAT]),DDT));
-        {false,_}     -> get_routes(Headers, T, GOF, lists:subtract(lists:append([ResDests, DAF]),DDF))
+        {true,{1,_}}  -> ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT));
+        {false,{_,1}} -> ordsets:union(DAF, ordsets:subtract(ResDests, DDF));
+        {true,_}      -> get_routes(Headers, T, GOT, ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT)));
+        {false,_}     -> get_routes(Headers, T, GOF, ordsets:union(DAF, ordsets:subtract(ResDests, DDF)))
     end.
 
 headers_match(all, Args, Headers) ->
@@ -267,36 +270,34 @@ get_binding_order(Args) ->
 %% DAF : Destinations to Add on False
 %% DDT : Destinations to Del on True
 %% DDF : Destinations to Del on False
-get_dests_operators(_, []) -> {[], [], [], []};
 get_dests_operators(VHost, Args) ->
-    {DAT,DAF,DDT,DDF} = get_dests_operators(VHost, Args, sets:new(), sets:new(), sets:new(), sets:new()),
-    {sets:to_list(DAT), sets:to_list(DAF), sets:to_list(DDT), sets:to_list(DDF)}.
+    get_dests_operators(VHost, Args, ordsets:new(), ordsets:new(), ordsets:new(), ordsets:new()).
 
 get_dests_operators(_, [], DAT,DAF,DDT,DDF) -> {DAT,DAF,DDT,DDF};
 get_dests_operators(VHost, [{<<"x-match-addq-ontrue">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
     R = rabbit_misc:r(VHost, queue, D),
-    get_dests_operators(VHost, T, sets:add_element(R,DAT), DAF, DDT,DDF);
+    get_dests_operators(VHost, T, ordsets:add_element(R,DAT), DAF, DDT, DDF);
 get_dests_operators(VHost, [{<<"x-match-adde-ontrue">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
     R = rabbit_misc:r(VHost, exchange, D),
-    get_dests_operators(VHost, T, sets:add_element(R,DAT), DAF, DDT,DDF);
+    get_dests_operators(VHost, T, ordsets:add_element(R,DAT), DAF, DDT, DDF);
 get_dests_operators(VHost, [{<<"x-match-addq-onfalse">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
     R = rabbit_misc:r(VHost, queue, D),
-    get_dests_operators(VHost, T, DAT, sets:add_element(R,DAF), DDT,DDF);
+    get_dests_operators(VHost, T, DAT, ordsets:add_element(R,DAF), DDT, DDF);
 get_dests_operators(VHost, [{<<"x-match-adde-onfalse">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
     R = rabbit_misc:r(VHost, exchange, D),
-    get_dests_operators(VHost, T, DAT, sets:add_element(R,DAF), DDT,DDF);
+    get_dests_operators(VHost, T, DAT, ordsets:add_element(R,DAF), DDT, DDF);
 get_dests_operators(VHost, [{<<"x-match-delq-ontrue">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
     R = rabbit_misc:r(VHost, queue, D),
-    get_dests_operators(VHost, T, DAT,DAF, sets:add_element(R,DDT), DDF);
+    get_dests_operators(VHost, T, DAT, DAF, ordsets:add_element(R,DDT), DDF);
 get_dests_operators(VHost, [{<<"x-match-dele-ontrue">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
     R = rabbit_misc:r(VHost, exchange, D),
-    get_dests_operators(VHost, T, DAT,DAF, sets:add_element(R,DDT), DDF);
+    get_dests_operators(VHost, T, DAT, DAF, ordsets:add_element(R,DDT), DDF);
 get_dests_operators(VHost, [{<<"x-match-delq-onfalse">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
     R = rabbit_misc:r(VHost, queue, D),
-    get_dests_operators(VHost, T, DAT,DAF, DDT, sets:add_element(R,DDF));
+    get_dests_operators(VHost, T, DAT, DAF, DDT, ordsets:add_element(R,DDF));
 get_dests_operators(VHost, [{<<"x-match-dele-onfalse">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
     R = rabbit_misc:r(VHost, exchange, D),
-    get_dests_operators(VHost, T, DAT,DAF, DDT, sets:add_element(R,DDF));
+    get_dests_operators(VHost, T, DAT, DAF, DDT, ordsets:add_element(R,DDF));
 get_dests_operators(VHost, [_ | T], DAT,DAF,DDT,DDF) ->
     get_dests_operators(VHost, T, DAT,DAF,DDT,DDF).
 
