@@ -51,30 +51,18 @@ route(#exchange{name = Name},
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
     end,
-    get_routes(Headers, CurrentOrderedBindings, 0, ordsets:new()).
+    get_routes(Headers, CurrentOrderedBindings, ordsets:new()).
 
-get_routes(_, [], _, ResDests) -> ordsets:to_list(ResDests);
-get_routes(Headers, [ {_, BindingType, Dest, Args, _} | T ], _, ResDests) ->
+get_routes(_, [], ResDests) -> ordsets:to_list(ResDests);
+get_routes(Headers, [ {_, BindingType, Dest, Args, _} | T ], ResDests) ->
     case headers_match(BindingType, Args, Headers) of
-        true -> get_routes(Headers, T, 0, ordsets:add_element(Dest, ResDests));
-           _ -> get_routes(Headers, T, 0, ResDests)
+        true -> get_routes(Headers, T, ordsets:add_element(Dest, ResDests));
+           _ -> get_routes(Headers, T, ResDests)
     end;
-% Jump to the next binding satisfying the last goto operator
-get_routes(Headers, [ {Order, _, _, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
-    get_routes(Headers, T, GotoOrder, ResDests);
-get_routes(Headers, [ {_, BindingType, {GOT, GOF, StopOperators}, Dest, Args, _} | T ], _, ResDests) ->
-    case {headers_match(BindingType, Args, Headers), StopOperators} of
-        {true,{1,_}}  -> ordsets:add_element(Dest, ResDests);
-        {false,{_,1}} -> ResDests;
-        {true,_}      -> get_routes(Headers, T, GOT, ordsets:add_element(Dest, ResDests));
-        {false,_}     -> get_routes(Headers, T, GOF, ResDests)
-    end;
-get_routes(Headers, [ {_, BindingType, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF}, Dest, Args, _} | T ], _, ResDests) ->
-    case {headers_match(BindingType, Args, Headers), StopOperators} of
-        {true,{1,_}}  -> ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT));
-        {false,{_,1}} -> ordsets:union(DAF, ordsets:subtract(ResDests, DDF));
-        {true,_}      -> get_routes(Headers, T, GOT, ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT)));
-        {false,_}     -> get_routes(Headers, T, GOF, ordsets:union(DAF, ordsets:subtract(ResDests, DDF)))
+get_routes(Headers, [ {_, BindingType, {DAT, DAF}, Dest, Args, _} | T ], ResDests) ->
+    case headers_match(BindingType, Args, Headers) of
+        true  -> get_routes(Headers, T, ordsets:union(DAT, ordsets:add_element(Dest, ResDests)));
+        _ -> get_routes(Headers, T, ordsets:union(DAF, ResDests))
     end.
 
 headers_match(all, Args, Headers) ->
@@ -246,64 +234,30 @@ get_match_operators([ {K, _, V} | T ], Res) ->
     get_match_operators (T, [ {K, eq, V} | Res]).
 
 
-get_goto_operators([], Result) -> Result;
-get_goto_operators([{<<"x-match-goto-ontrue">>, long, N} | T], {_, GotoOnFalse}) ->
-    get_goto_operators(T, {N, GotoOnFalse});
-get_goto_operators([{<<"x-match-goto-onfalse">>, long, N} | T], {GotoOnTrue, _}) ->
-    get_goto_operators(T, {GotoOnTrue, N});
-get_goto_operators([_ | T], {GotoOnTrue, GotoOnFalse}) ->
-    get_goto_operators(T, {GotoOnTrue, GotoOnFalse}).
-
-
-get_stop_operators([], Result) -> Result;
-get_stop_operators([{<<"x-match-stop-ontrue">>, bool, true} | T], {_, StopOnFalse}) ->
-    get_stop_operators(T, {1, StopOnFalse});
-get_stop_operators([{<<"x-match-stop-onfalse">>, bool, true} | T], {StopOnTrue, _}) ->
-    get_stop_operators(T, {StopOnTrue, 1});
-get_stop_operators([_ | T], {StopOnTrue, StopOnFalse}) ->
-    get_stop_operators(T, {StopOnTrue, StopOnFalse}).
-
-
 get_binding_order(Args) ->
-    case rabbit_misc:table_lookup(Args, <<"x-match-order">>) of
-        undefined     -> 200;
-        {long, Order} -> Order
-    end.
+    200.
+
 
 %% DAT : Destinations to Add on True
 %% DAF : Destinations to Add on False
-%% DDT : Destinations to Del on True
-%% DDF : Destinations to Del on False
 get_dests_operators(VHost, Args) ->
-    get_dests_operators(VHost, Args, ordsets:new(), ordsets:new(), ordsets:new(), ordsets:new()).
+    get_dests_operators(VHost, Args, ordsets:new(), ordsets:new()).
 
-get_dests_operators(_, [], DAT,DAF,DDT,DDF) -> {DAT,DAF,DDT,DDF};
-get_dests_operators(VHost, [{<<"x-match-addq-ontrue">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
+get_dests_operators(_, [], DAT,DAF) -> {DAT,DAF};
+get_dests_operators(VHost, [{<<"x-match-addq-ontrue">>, longstr, D} | T], DAT,DAF) ->
     R = rabbit_misc:r(VHost, queue, D),
-    get_dests_operators(VHost, T, ordsets:add_element(R,DAT), DAF, DDT, DDF);
-get_dests_operators(VHost, [{<<"x-match-adde-ontrue">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
+    get_dests_operators(VHost, T, ordsets:add_element(R,DAT), DAF);
+get_dests_operators(VHost, [{<<"x-match-adde-ontrue">>, longstr, D} | T], DAT,DAF) ->
     R = rabbit_misc:r(VHost, exchange, D),
-    get_dests_operators(VHost, T, ordsets:add_element(R,DAT), DAF, DDT, DDF);
-get_dests_operators(VHost, [{<<"x-match-addq-onfalse">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
+    get_dests_operators(VHost, T, ordsets:add_element(R,DAT), DAF);
+get_dests_operators(VHost, [{<<"x-match-addq-onfalse">>, longstr, D} | T], DAT,DAF) ->
     R = rabbit_misc:r(VHost, queue, D),
-    get_dests_operators(VHost, T, DAT, ordsets:add_element(R,DAF), DDT, DDF);
-get_dests_operators(VHost, [{<<"x-match-adde-onfalse">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
+    get_dests_operators(VHost, T, DAT, ordsets:add_element(R,DAF));
+get_dests_operators(VHost, [{<<"x-match-adde-onfalse">>, longstr, D} | T], DAT,DAF) ->
     R = rabbit_misc:r(VHost, exchange, D),
-    get_dests_operators(VHost, T, DAT, ordsets:add_element(R,DAF), DDT, DDF);
-get_dests_operators(VHost, [{<<"x-match-delq-ontrue">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
-    R = rabbit_misc:r(VHost, queue, D),
-    get_dests_operators(VHost, T, DAT, DAF, ordsets:add_element(R,DDT), DDF);
-get_dests_operators(VHost, [{<<"x-match-dele-ontrue">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
-    R = rabbit_misc:r(VHost, exchange, D),
-    get_dests_operators(VHost, T, DAT, DAF, ordsets:add_element(R,DDT), DDF);
-get_dests_operators(VHost, [{<<"x-match-delq-onfalse">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
-    R = rabbit_misc:r(VHost, queue, D),
-    get_dests_operators(VHost, T, DAT, DAF, DDT, ordsets:add_element(R,DDF));
-get_dests_operators(VHost, [{<<"x-match-dele-onfalse">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
-    R = rabbit_misc:r(VHost, exchange, D),
-    get_dests_operators(VHost, T, DAT, DAF, DDT, ordsets:add_element(R,DDF));
-get_dests_operators(VHost, [_ | T], DAT,DAF,DDT,DDF) ->
-    get_dests_operators(VHost, T, DAT,DAF,DDT,DDF).
+    get_dests_operators(VHost, T, DAT, ordsets:add_element(R,DAF));
+get_dests_operators(VHost, [_ | T], DAT,DAF) ->
+    get_dests_operators(VHost, T, DAT,DAF).
 
 
 %% Flatten one level for list of values (array)
@@ -333,20 +287,14 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
 % Let's doing that heavy lookup one time only
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
     BindingOrder = get_binding_order(BindingArgs),
-    {GOT, GOF} = get_goto_operators(BindingArgs, {0, 0}),
-    StopOperators = get_stop_operators(BindingArgs, {0, 0}),
     FlattenedBindindArgs = flatten_binding_args(BindingArgs),
     MatchOperators = get_match_operators(FlattenedBindindArgs),
-    {DAT, DAF, DDT, DDF} = get_dests_operators(VHost, FlattenedBindindArgs),
+    {DAT, DAF} = get_dests_operators(VHost, FlattenedBindindArgs),
     CurrentOrderedBindings = case mnesia:read(rabbit_headers_bindings, XName, write) of
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
     end,
-    NewBinding = case {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF} of
-        {0, 0, {0, 0}, [], [], [], []} -> {BindingOrder, BindingType, Dest, MatchOperators, BindingId};
-        {_, _, _, [], [], [], []} -> {BindingOrder, BindingType, {GOT, GOF, StopOperators}, Dest, MatchOperators, BindingId};
-        _ -> {BindingOrder, BindingType, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF}, Dest, MatchOperators, BindingId}
-    end,
+    NewBinding = {BindingOrder, BindingType, {DAT, DAF}, Dest, MatchOperators, BindingId},
     NewBindings = lists:keysort(1, [NewBinding | CurrentOrderedBindings]),
     NewRecord = #headers_bindings{exchange_name = XName, bindings = NewBindings},
     ok = mnesia:write(rabbit_headers_bindings, NewRecord, write);
@@ -367,11 +315,6 @@ remove_bindings(_, _, _) ->
 
 remove_bindings_ids(_, [], Res) -> Res;
 remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,_,BId} | T], Res) ->
-    case lists:member(BId, BindingIdsToDelete) of
-        true -> remove_bindings_ids(BindingIdsToDelete, T, Res);
-        _    -> remove_bindings_ids(BindingIdsToDelete, T, lists:append(Res, [Bind]))
-    end;
-remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,BId} | T], Res) ->
     case lists:member(BId, BindingIdsToDelete) of
         true -> remove_bindings_ids(BindingIdsToDelete, T, Res);
         _    -> remove_bindings_ids(BindingIdsToDelete, T, lists:append(Res, [Bind]))
