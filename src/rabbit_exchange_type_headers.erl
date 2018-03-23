@@ -47,21 +47,16 @@ route(#exchange{name = Name},
                   undefined -> [];
                   H         -> rabbit_misc:sort_field_table(H)
               end,
-    CurrentOrderedBindings = case ets:lookup(rabbit_headers_bindings, Name) of
+    CurrentBindings = case ets:lookup(rabbit_headers_bindings, Name) of
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
     end,
-    get_routes(Headers, CurrentOrderedBindings, ordsets:new()).
+    get_routes(Headers, CurrentBindings, ordsets:new()).
 
 get_routes(_, [], ResDests) -> ordsets:to_list(ResDests);
-get_routes(Headers, [ {_, BindingType, Dest, Args, _} | T ], ResDests) ->
+get_routes(Headers, [ {BindingType, DAT, DAF, Args, _} | T ], ResDests) ->
     case headers_match(BindingType, Args, Headers) of
-        true -> get_routes(Headers, T, ordsets:add_element(Dest, ResDests));
-           _ -> get_routes(Headers, T, ResDests)
-    end;
-get_routes(Headers, [ {_, BindingType, {DAT, DAF}, Dest, Args, _} | T ], ResDests) ->
-    case headers_match(BindingType, Args, Headers) of
-        true  -> get_routes(Headers, T, ordsets:union(DAT, ordsets:add_element(Dest, ResDests)));
+        true  -> get_routes(Headers, T, ordsets:union(DAT, ResDests));
         _ -> get_routes(Headers, T, ordsets:union(DAF, ResDests))
     end.
 
@@ -73,8 +68,8 @@ headers_match(any, Args, Headers) ->
 
 validate_binding(_X, #binding{args = Args}) ->
     case rabbit_misc:table_lookup(Args, <<"x-match">>) of
-        {longstr, <<"all">>} -> validate_binding_order(Args);
-        {longstr, <<"any">>} -> validate_binding_order(Args);
+        {longstr, <<"all">>} -> ok;
+        {longstr, <<"any">>} -> ok;
         {longstr, Other}     -> {error,
                                  {binding_invalid,
                                   "Invalid x-match field value ~p; "
@@ -83,18 +78,9 @@ validate_binding(_X, #binding{args = Args}) ->
                                  {binding_invalid,
                                   "Invalid x-match field type ~p (value ~p); "
                                   "expected longstr", [Type, Other]}};
-        undefined            -> validate_binding_order(Args)
+        undefined            -> ok
     end.
 
-validate_binding_order(Args) ->
-    case rabbit_misc:table_lookup(Args, <<"x-match-order">>) of
-        undefined     -> ok;
-        {long, _}   -> ok;
-        {Type, _} -> {error,
-                          {binding_invalid,
-                           "Invalid x-match-order field type ~p; "
-                                  "expected number", [Type]}}
-    end.
 
 %% [0] spec is vague on whether it can be omitted but in practice it's
 %% useful to allow people to do this
@@ -234,10 +220,6 @@ get_match_operators([ {K, _, V} | T ], Res) ->
     get_match_operators (T, [ {K, eq, V} | Res]).
 
 
-get_binding_order(Args) ->
-    200.
-
-
 %% DAT : Destinations to Add on True
 %% DAF : Destinations to Add on False
 get_dests_operators(VHost, Args) ->
@@ -286,35 +268,34 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
 % Let's doing that heavy lookup one time only
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
-    BindingOrder = get_binding_order(BindingArgs),
     FlattenedBindindArgs = flatten_binding_args(BindingArgs),
     MatchOperators = get_match_operators(FlattenedBindindArgs),
     {DAT, DAF} = get_dests_operators(VHost, FlattenedBindindArgs),
-    CurrentOrderedBindings = case mnesia:read(rabbit_headers_bindings, XName, write) of
+    CurrentBindings = case mnesia:read(rabbit_headers_bindings, XName, write) of
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
     end,
-    NewBinding = {BindingOrder, BindingType, {DAT, DAF}, Dest, MatchOperators, BindingId},
-    NewBindings = lists:keysort(1, [NewBinding | CurrentOrderedBindings]),
+    NewBinding = {BindingType, ordsets:add_element(Dest, DAT), DAF, MatchOperators, BindingId},
+    NewBindings = [NewBinding | CurrentBindings],
     NewRecord = #headers_bindings{exchange_name = XName, bindings = NewBindings},
     ok = mnesia:write(rabbit_headers_bindings, NewRecord, write);
 add_binding(_, _, _) ->
     ok.
 
 remove_bindings(transaction, #exchange{name = XName}, BindingsToDelete) ->
-    CurrentOrderedBindings = case mnesia:read(rabbit_headers_bindings, XName, write) of
+    CurrentBindings = case mnesia:read(rabbit_headers_bindings, XName, write) of
         [] -> [];
         [#headers_bindings{bindings = E}] -> E
     end,
     BindingIdsToDelete = [crypto:hash(md5, term_to_binary(B)) || B <- BindingsToDelete],
-    NewOrderedBindings = remove_bindings_ids(BindingIdsToDelete, CurrentOrderedBindings, []),
-    NewRecord = #headers_bindings{exchange_name = XName, bindings = NewOrderedBindings},
+    NewBindings = remove_bindings_ids(BindingIdsToDelete, CurrentBindings, []),
+    NewRecord = #headers_bindings{exchange_name = XName, bindings = NewBindings},
     ok = mnesia:write(rabbit_headers_bindings, NewRecord, write);
 remove_bindings(_, _, _) ->
     ok.
 
 remove_bindings_ids(_, [], Res) -> Res;
-remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,_,BId} | T], Res) ->
+remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,BId} | T], Res) ->
     case lists:member(BId, BindingIdsToDelete) of
         true -> remove_bindings_ids(BindingIdsToDelete, T, Res);
         _    -> remove_bindings_ids(BindingIdsToDelete, T, lists:append(Res, [Bind]))
