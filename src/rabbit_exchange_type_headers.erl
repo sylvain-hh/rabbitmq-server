@@ -94,6 +94,10 @@ validate_list_type_usage(_BindingType, [ {<<"x-?>= ", _/binary>>, array, _} | _ 
     {error, {binding_invalid, "Invalid use of List type with <=, <, >= or > operators", []}};
 validate_list_type_usage(_BindingType, [ {<<"x-?> ", _/binary>>, array, _} | _ ]) ->
     {error, {binding_invalid, "Invalid use of List type with <=, <, >= or > operators", []}};
+validate_list_type_usage(_BindingType, [ {<<"x-?=re ", _/binary>>, array, _} | _ ]) ->
+    {error, {binding_invalid, "Invalid use of List type with regex operator", []}};
+validate_list_type_usage(_BindingType, [ {<<"x-?!=re ", _/binary>>, array, _} | _ ]) ->
+    {error, {binding_invalid, "Invalid use of List type with regex operator", []}};
 validate_list_type_usage(all, [ {<<"x-?= ", _/binary>>, array, _} | _ ]) ->
     {error, {binding_invalid, "Invalid use of List type with = operator with binding type 'all'", []}};
 validate_list_type_usage(any, [ {<<"x-?!= ", _/binary>>, array, _} | _ ]) ->
@@ -161,7 +165,18 @@ headers_match_all([{_, lt, BV} | BNext], HCur = [{_, _, HV} | _])
 headers_match_all([{_, lt, _} | _], _) -> false;
 headers_match_all([{_, le, BV} | BNext], HCur = [{_, _, HV} | _])
     when HV =< BV -> headers_match_all(BNext, HCur);
-headers_match_all([{_, le, _} | _], _) -> false.
+headers_match_all([{_, le, _} | _], _) -> false;
+% Regex match
+headers_match_all([{_, re, BV} | BNext], [{_, _, HV} | HNext]) ->
+    case re:run(HV, BV, [{capture, none}]) of
+        match -> headers_match_all(BNext, HNext);
+        _ -> false
+    end;
+headers_match_all([{_, nre, BV} | BNext], [{_, _, HV} | HNext]) ->
+    case re:run(HV, BV, [{capture, none}]) of
+        match -> false;
+        _ -> headers_match_all(BNext, HNext)
+    end.
 
 
 
@@ -194,6 +209,17 @@ headers_match_any([{_, gt, BV} | _], [{_, _, HV} | _]) when HV > BV -> true;
 headers_match_any([{_, ge, BV} | _], [{_, _, HV} | _]) when HV >= BV -> true;
 headers_match_any([{_, lt, BV} | _], [{_, _, HV} | _]) when HV < BV -> true;
 headers_match_any([{_, le, BV} | _], [{_, _, HV} | _]) when HV =< BV -> true;
+% Regex match
+headers_match_any([{_, re, BV} | BNext], [{_, _, HV} | HNext]) ->
+    case re:run(HV, BV, [{capture, none}]) of
+        match -> true;
+        _ -> headers_match_any(BNext, HNext)
+    end;
+headers_match_any([{_, nre, BV} | BNext], [{_, _, HV} | HNext]) ->
+    case re:run(HV, BV, [{capture, none}]) of
+        match -> headers_match_any(BNext, HNext);
+        _ -> true
+    end;
 % No match yet; go next
 headers_match_any([_ | BNext], HCur) ->
     headers_match_any(BNext, HCur).
@@ -226,8 +252,12 @@ get_match_operators([ {<<"x-?< ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_operators (Tail, [ {K, lt, V} | Res]);
 get_match_operators([ {<<"x-?= ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_operators (Tail, [ {K, eq, V} | Res]);
+get_match_operators([ {<<"x-?=re ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_operators (Tail, [ {K, re, V} | Res]);
 get_match_operators([ {<<"x-?!= ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_operators (Tail, [ {K, ne, V} | Res]);
+get_match_operators([ {<<"x-?!=re ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_operators (Tail, [ {K, nre, V} | Res]);
 get_match_operators([ {<<"x-?> ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_operators (Tail, [ {K, gt, V} | Res]);
 get_match_operators([ {<<"x-?>= ", K/binary>>, _, V} | Tail ], Res) ->
