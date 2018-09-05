@@ -50,28 +50,58 @@ route(#exchange{name = Name},
                   undefined -> [];
                   H         -> rabbit_misc:sort_field_table(H)
               end,
-    CurrentBindings = case ets:lookup(rabbit_open_bindings, Name) of
+    CurrentOrderedBindings = case ets:lookup(rabbit_open_bindings, Name) of
         [] -> [];
         [#open_bindings{bindings = E}] -> E
     end,
-    get_routes(Headers, CurrentBindings, ordsets:new()).
+io:format("Bindings : ~p~n", [CurrentOrderedBindings]),
+    get_routes(Headers, CurrentOrderedBindings, 0, ordsets:new()).
 
-get_routes(_, [], ResDests) -> ordsets:to_list(ResDests);
-get_routes(Headers, [ {BindingType, DAT, DAF, Args, _} | T ], ResDests) ->
+get_routes(_, [], _, ResDests) -> ordsets:to_list(ResDests);
+get_routes(Headers, [ {_, BindingType, Dest, Args, _} | T ], _, ResDests) ->
     case headers_match(BindingType, Args, Headers) of
-        true  -> get_routes(Headers, T, ordsets:union(DAT, ResDests));
-        _ -> get_routes(Headers, T, ordsets:union(DAF, ResDests))
+        true -> get_routes(Headers, T, 0, ordsets:add_element(Dest, ResDests));
+           _ -> get_routes(Headers, T, 0, ResDests)
+    end;
+% Jump to the next binding satisfying the last goto operator
+get_routes(Headers, [ {Order, _, _, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
+    get_routes(Headers, T, GotoOrder, ResDests);
+get_routes(Headers, [ {_, BindingType, {GOT, GOF, StopOperators}, Dest, Args, _} | T ], _, ResDests) ->
+    case {headers_match(BindingType, Args, Headers), StopOperators} of
+        {true,{1,_}}  -> ordsets:add_element(Dest, ResDests);
+        {false,{_,1}} -> ResDests;
+        {true,_}      -> get_routes(Headers, T, GOT, ordsets:add_element(Dest, ResDests));
+        {false,_}     -> get_routes(Headers, T, GOF, ResDests)
+    end;
+get_routes(Headers, [ {_, BindingType, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF}, Dest, Args, _} | T ], _, ResDests) ->
+    case {headers_match(BindingType, Args, Headers), StopOperators} of
+        {true,{1,_}}  -> ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT));
+        {false,{_,1}} -> ordsets:union(DAF, ordsets:subtract(ResDests, DDF));
+        {true,_}      -> get_routes(Headers, T, GOT, ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT)));
+        {false,_}     -> get_routes(Headers, T, GOF, ordsets:union(DAF, ordsets:subtract(ResDests, DDF)))
     end.
 
+%route(#exchange{name = Name},
+%      #delivery{message = #basic_message{content = Content}}) ->
+%    Headers = case (Content#content.properties)#'P_basic'.headers of
+%                  undefined -> [];
+%                  H         -> rabbit_misc:sort_field_table(H)
+%              end,
+%    CurrentBindings = case ets:lookup(rabbit_open_bindings, Name) of
+%        [] -> [];
+%        [#open_bindings{bindings = E}] -> E
+%    end,
+%    get_routes(Headers, CurrentBindings, ordsets:new()).
+%
+%get_routes(_, [], ResDests) -> ordsets:to_list(ResDests);
+%get_routes(Headers, [ {BindingType, DAT, DAF, Args, _} | T ], ResDests) ->
+%    case headers_match(BindingType, Args, Headers) of
+%        true  -> get_routes(Headers, T, ordsets:union(DAT, ResDests));
+%        _ -> get_routes(Headers, T, ordsets:union(DAF, ResDests))
+%    end.
+
 headers_match(all, Args, Headers) ->
-    case headers_match_all_hkreex(Args, Headers) of
-        true ->
-            case headers_match_all_hkrenx(Args, Headers) of
-                true -> headers_match_all(Args, Headers);
-                _ -> false
-            end;
-        _ -> false
-    end;
+    headers_match_all(Args, Headers);
 headers_match(any, Args, Headers) ->
     headers_match_any(Args, Headers).
 
@@ -99,17 +129,13 @@ validate_list_type_usage(BindingType, Args) ->
     validate_list_type_usage(BindingType, Args, Args).
 
 validate_list_type_usage(_, [], Args) -> validate_no_deep_lists(Args);
-validate_list_type_usage(all, [ {<<"x-hkv?= ", _/binary>>, array, _} | _ ], _) ->
+validate_list_type_usage(all, [ {<<"x-?hkv= ", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with = operator with binding type 'all'", []}};
-validate_list_type_usage(any, [ {<<"x-hkv?!= ", _/binary>>, array, _} | _ ], _) ->
+validate_list_type_usage(any, [ {<<"x-?hkv!= ", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with != operator with binding type 'any'", []}};
-validate_list_type_usage(any, [ {<<"x-hk?nx">>, _, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of nx operator with binding type 'any'", []}};
-validate_list_type_usage(any, [ {<<"x-hkre?nx">>, _, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of re nx operator with binding type 'any'", []}};
 validate_list_type_usage(BindingType, [ {<< RuleKey/binary >>, array, _} | Tail ], Args) ->
     RKL = binary_to_list(RuleKey),
-    MatchOperators = ["x-hkv?<", "x-hkv?>", "x-hk?<", "x-hk?>", "x-hkvre?=", "x-hkvre?!="],
+    MatchOperators = ["x-?hkv<", "x-?hkv>", "x-?hk<", "x-?hk>", "x-?hkvre=", "x-?hkvre!="],
     case lists:filter(fun(S) -> lists:prefix(S, RKL) end, MatchOperators) of
         [] -> validate_list_type_usage(BindingType, Tail, Args);
         _ -> {error, {binding_invalid, "Invalid use of list type with comparison or regex operators", []}}
@@ -154,35 +180,46 @@ validate_operators2([ {<<>>, _, _} | _ ]) ->
 %validate_operators2([ { K, T, V } | Tail ]) ->
 %    io:format("K:~p T:~p V:~p~n", [K, T, V]),
 %    validate_operators2(Tail);
-validate_operators2([ {<<"x-hk?ex">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-hk?nx">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-match-addq-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-match-addq-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-match-adde-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-match-adde-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkex">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hknx">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-addq-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-addq-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-adde-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-adde-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-delq-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-delq-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-dele-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-dele-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+
+% Binding order is numeric only
+validate_operators2([ {<<"x-order">>, _, V} | Tail ]) when is_integer(V) -> validate_operators2(Tail);
+
+% Gotos are numeric only
+validate_operators2([ {<<"x-goto-ontrue">>, _, V} | Tail ]) when is_integer(V) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-goto-onfalse">>, _, V} | Tail ]) when is_integer(V) -> validate_operators2(Tail);
+
+% Stops
+validate_operators2([ {<<"x-stop-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-stop-onfalse">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
 
 % Operators hkv with < or > must be numeric only.
-validate_operators2([ {<<"x-hkv?<= ", ?ONE_CHAR_AT_LEAST>>, _, V} | Tail ]) when is_number(V) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-hkv?<= ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
+validate_operators2([ {<<"x-?hkv<= ", ?ONE_CHAR_AT_LEAST>>, _, V} | Tail ]) when is_number(V) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkv<= ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
-validate_operators2([ {<<"x-hkv?< ", ?ONE_CHAR_AT_LEAST>>, _, V} | Tail ]) when is_number(V) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-hkv?< ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
+validate_operators2([ {<<"x-?hkv< ", ?ONE_CHAR_AT_LEAST>>, _, V} | Tail ]) when is_number(V) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkv< ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
-validate_operators2([ {<<"x-hkv?>= ", ?ONE_CHAR_AT_LEAST>>, _, V} | Tail ]) when is_number(V) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-hkv?>= ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
+validate_operators2([ {<<"x-?hkv>= ", ?ONE_CHAR_AT_LEAST>>, _, V} | Tail ]) when is_number(V) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkv>= ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
-validate_operators2([ {<<"x-hkv?> ", ?ONE_CHAR_AT_LEAST>>, _, V} | Tail ]) when is_number(V) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-hkv?> ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
+validate_operators2([ {<<"x-?hkv> ", ?ONE_CHAR_AT_LEAST>>, _, V} | Tail ]) when is_number(V) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkv> ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
 
-validate_operators2([ {<<"x-hkv?= ", ?ONE_CHAR_AT_LEAST>>, _, _} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-hkvre?= ", ?ONE_CHAR_AT_LEAST>>, longstr, _} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-hkv?!= ", ?ONE_CHAR_AT_LEAST>>, _, _} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-hkvre?!= ", ?ONE_CHAR_AT_LEAST>>, longstr, _} | Tail ]) -> validate_operators2(Tail);
-
-% RE on HK
-validate_operators2([ {<<"x-hkre?ex">>, longstr, _} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-hkre?nx">>, longstr, _} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkv= ", ?ONE_CHAR_AT_LEAST>>, _, _} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkvre= ", ?ONE_CHAR_AT_LEAST>>, longstr, _} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkv!= ", ?ONE_CHAR_AT_LEAST>>, _, _} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkvre!= ", ?ONE_CHAR_AT_LEAST>>, longstr, _} | Tail ]) -> validate_operators2(Tail);
 
 validate_operators2([ {InvalidKey = <<"x-", _/binary>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Binding's key ~p cannot start with 'x-' in x-open exchange; use new operators to match such keys", [InvalidKey]}};
@@ -222,9 +259,9 @@ validate_regexes_item(RegexBin, Tail) ->
     end.
 
 validate_regexes([]) -> ok;
-validate_regexes([ {<< RuleKey:9/binary, _/binary >>, longstr, << RegexBin/binary >>} | Tail ]) when RuleKey==<<"x-hkvre?=">>; RuleKey==<<"x-hkre?ex">>; RuleKey==<<"x-hkre?nx">> ->
+validate_regexes([ {<< RuleKey:9/binary, _/binary >>, longstr, << RegexBin/binary >>} | Tail ]) when RuleKey==<<"x-?hkvre=">> ->
     validate_regexes_item(RegexBin, Tail);
-validate_regexes([ {<< RuleKey:10/binary, _/binary >>, longstr, << RegexBin/binary >>} | Tail ]) when RuleKey==<<"x-hkvre?!=">> ->
+validate_regexes([ {<< RuleKey:10/binary, _/binary >>, longstr, << RegexBin/binary >>} | Tail ]) when RuleKey==<<"x-?hkvre!=">> ->
     validate_regexes_item(RegexBin, Tail);
 validate_regexes([ _ | Tail ]) ->
         validate_regexes(Tail).
@@ -245,38 +282,12 @@ parse_x_match(_)                    -> all.
 
 %% Binding type 'all' match
 
-% Special funs to checks for keys (non-)existence via regex
-headers_match_all_hkreex([], _) -> true;
-headers_match_all_hkreex(BCur = [{_, reex, BV} | _], [{HK, _, _} | HNext]) ->
-    case re:run(HK, BV, [ {capture, none} ]) of
-        match -> headers_match_all_hkreex(BCur, HNext);
-        _ -> false
-    end;
-headers_match_all_hkreex([_ | BNext], HCur) ->
-    headers_match_all_hkreex(BNext, HCur).
-
-headers_match_all_hkrenx([], _) -> true;
-headers_match_all_hkrenx(BCur = [{_, renx, BV} | _], [{HK, _, _} | HNext]) ->
-    case re:run(HK, BV, [ {capture, none} ]) of
-        match -> false;
-        _ -> headers_match_all_hkrenx(BCur, HNext)
-    end;
-headers_match_all_hkrenx([_ | BNext], HCur) ->
-    headers_match_all_hkrenx(BNext, HCur).
-
-
 % No more match operator to check; return true
 headers_match_all([], _) -> true;
 
 % Purge nx op on no data as all these are true
 headers_match_all([{_, nx, _} | BNext], []) ->
     headers_match_all(BNext, []);
-
-% Purge reex and renx ops as they have benn checked upstream
-headers_match_all([{_, reex, _} | BNext], HCur) ->
-    headers_match_all(BNext, HCur);
-headers_match_all([{_, renx, _} | BNext], HCur) ->
-    headers_match_all(BNext, HCur);
 
 % No more message header but still match operator to check; return false
 headers_match_all(_, []) -> false;
@@ -349,6 +360,9 @@ headers_match_any(_, []) -> false;
 % Current header key not in match operators; go next header with current match operator
 headers_match_any(BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
     when BK > HK -> headers_match_any(BCur, HNext);
+% Current binding key must not exist in data, return true
+headers_match_any([{BK, nx, _} | _], [{HK, _, _} | _])
+    when BK < HK -> true;
 % Current binding key does not exist in message; go next binding
 headers_match_any([{BK, _, _} | BNext], HCur = [{HK, _, _} | _])
     when BK < HK -> headers_match_any(BNext, HCur);
@@ -388,60 +402,123 @@ get_match_operators(BindingArgs) ->
 % We won't check types again as this has been done during validation..
 get_match_operators([], Result) -> Result;
 % Does a key exist ?
-get_match_operators([ {<<"x-hk?ex">>, _, K} | Tail ], Res) ->
-    get_match_operators (Tail, [ {K, ex, nil} | Res]);
+get_match_operators([ {<<"x-?hkex">>, _, V} | Tail ], Res) ->
+    get_match_operators (Tail, [ {V, ex, nil} | Res]);
 % Does a key NOT exist ?
-get_match_operators([ {<<"x-hk?nx">>, _, K} | Tail ], Res) ->
-    get_match_operators (Tail, [ {K, nx, nil} | Res]);
-% Does a key match a regex ?
-get_match_operators([ {<<"x-hkre?ex">>, _, K} | Tail ], Res) ->
-    get_match_operators (Tail, [ {K, reex, K} | Res]);
-% Does a key NOT match a regex ?
-get_match_operators([ {<<"x-hkre?nx">>, _, K} | Tail ], Res) ->
-    get_match_operators (Tail, [ {K, renx, K} | Res]);
+get_match_operators([ {<<"x-?hknx">>, _, V} | Tail ], Res) ->
+    get_match_operators (Tail, [ {V, nx, nil} | Res]);
 
 % operators <= < = != > >=
-get_match_operators([ {<<"x-hkv?<= ", K/binary>>, _, V} | Tail ], Res) ->
+get_match_operators([ {<<"x-?hkv<= ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_operators (Tail, [ {K, le, V} | Res]);
-get_match_operators([ {<<"x-hkv?< ", K/binary>>, _, V} | Tail ], Res) ->
+get_match_operators([ {<<"x-?hkv< ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_operators (Tail, [ {K, lt, V} | Res]);
-get_match_operators([ {<<"x-hkv?= ", K/binary>>, _, V} | Tail ], Res) ->
+get_match_operators([ {<<"x-?hkv= ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_operators (Tail, [ {K, eq, V} | Res]);
-get_match_operators([ {<<"x-hkvre?= ", K/binary>>, _, V} | Tail ], Res) ->
+get_match_operators([ {<<"x-?hkvre= ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_operators (Tail, [ {K, re, binary_to_list(V)} | Res]);
-get_match_operators([ {<<"x-hkv?!= ", K/binary>>, _, V} | Tail ], Res) ->
+get_match_operators([ {<<"x-?hkv!= ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_operators (Tail, [ {K, ne, V} | Res]);
-get_match_operators([ {<<"x-hkvre?!= ", K/binary>>, _, V} | Tail ], Res) ->
+get_match_operators([ {<<"x-?hkvre!= ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_operators (Tail, [ {K, nre, binary_to_list(V)} | Res]);
-get_match_operators([ {<<"x-hkv?> ", K/binary>>, _, V} | Tail ], Res) ->
+get_match_operators([ {<<"x-?hkv> ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_operators (Tail, [ {K, gt, V} | Res]);
-get_match_operators([ {<<"x-hkv?>= ", K/binary>>, _, V} | Tail ], Res) ->
+get_match_operators([ {<<"x-?hkv>= ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_operators (Tail, [ {K, ge, V} | Res]);
-% for all other cases, the match operator is 'eq'
+
+%% We should not found here another header beginning with x-? !!!
+
+%% All others beginnig with x- are other operators
+get_match_operators([ {<<"x-", _/binary>>, _, _} | Tail ], Res) ->
+    get_match_operators (Tail, Res);
+% And for all other cases, the match operator is 'eq'
 get_match_operators([ {K, _, V} | T ], Res) ->
     get_match_operators (T, [ {K, eq, V} | Res]).
 
 
+% Validation is made upstream
+get_binding_order(Args) ->
+    case rabbit_misc:table_lookup(Args, <<"x-order">>) of
+        undefined     -> 200;
+        {_, Order} -> Order
+    end.
+
+% Validation is made upstream
+get_stop_operators([], Result) -> Result;
+get_stop_operators([{<<"x-stop-ontrue">>, _, _} | T], {_, StopOnFalse}) ->
+    get_stop_operators(T, {1, StopOnFalse});
+get_stop_operators([{<<"x-stop-onfalse">>, _, _} | T], {StopOnTrue, _}) ->
+    get_stop_operators(T, {StopOnTrue, 1});
+get_stop_operators([_ | T], R) ->
+    get_stop_operators(T, R).
+
+% Validation is made upstream
+get_goto_operators([], Result) -> Result;
+get_goto_operators([{<<"x-goto-ontrue">>, _, N} | T], {_, GotoOnFalse}) ->
+    get_goto_operators(T, {N, GotoOnFalse});
+get_goto_operators([{<<"x-goto-onfalse">>, _, N} | T], {GotoOnTrue, _}) ->
+    get_goto_operators(T, {GotoOnTrue, N});
+get_goto_operators([_ | T], R) ->
+    get_goto_operators(T, R).
+
+
+
 %% DAT : Destinations to Add on True
 %% DAF : Destinations to Add on False
+%% DDT : Destinations to Del on True
+%% DDF : Destinations to Del on False
 get_dests_operators(VHost, Args) ->
-    get_dests_operators(VHost, Args, ordsets:new(), ordsets:new()).
+    get_dests_operators(VHost, Args, ordsets:new(), ordsets:new(), ordsets:new(), ordsets:new()).
 
-get_dests_operators(_, [], DAT,DAF) -> {DAT,DAF};
-get_dests_operators(VHost, [{<<"x-match-addq-ontrue">>, longstr, D} | T], DAT,DAF) ->
+get_dests_operators(_, [], DAT,DAF,DDT,DDF) -> {DAT,DAF,DDT,DDF};
+get_dests_operators(VHost, [{<<"x-addq-ontrue">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
     R = rabbit_misc:r(VHost, queue, D),
-    get_dests_operators(VHost, T, ordsets:add_element(R,DAT), DAF);
-get_dests_operators(VHost, [{<<"x-match-adde-ontrue">>, longstr, D} | T], DAT,DAF) ->
+    get_dests_operators(VHost, T, ordsets:add_element(R,DAT), DAF, DDT, DDF);
+get_dests_operators(VHost, [{<<"x-adde-ontrue">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
     R = rabbit_misc:r(VHost, exchange, D),
-    get_dests_operators(VHost, T, ordsets:add_element(R,DAT), DAF);
-get_dests_operators(VHost, [{<<"x-match-addq-onfalse">>, longstr, D} | T], DAT,DAF) ->
+    get_dests_operators(VHost, T, ordsets:add_element(R,DAT), DAF, DDT, DDF);
+get_dests_operators(VHost, [{<<"x-addq-onfalse">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
     R = rabbit_misc:r(VHost, queue, D),
-    get_dests_operators(VHost, T, DAT, ordsets:add_element(R,DAF));
-get_dests_operators(VHost, [{<<"x-match-adde-onfalse">>, longstr, D} | T], DAT,DAF) ->
+    get_dests_operators(VHost, T, DAT, ordsets:add_element(R,DAF), DDT, DDF);
+get_dests_operators(VHost, [{<<"x-adde-onfalse">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
     R = rabbit_misc:r(VHost, exchange, D),
-    get_dests_operators(VHost, T, DAT, ordsets:add_element(R,DAF));
-get_dests_operators(VHost, [_ | T], DAT,DAF) ->
-    get_dests_operators(VHost, T, DAT,DAF).
+    get_dests_operators(VHost, T, DAT, ordsets:add_element(R,DAF), DDT, DDF);
+get_dests_operators(VHost, [{<<"x-delq-ontrue">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
+    R = rabbit_misc:r(VHost, queue, D),
+    get_dests_operators(VHost, T, DAT, DAF, ordsets:add_element(R,DDT), DDF);
+get_dests_operators(VHost, [{<<"x-dele-ontrue">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
+    R = rabbit_misc:r(VHost, exchange, D),
+    get_dests_operators(VHost, T, DAT, DAF, ordsets:add_element(R,DDT), DDF);
+get_dests_operators(VHost, [{<<"x-delq-onfalse">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
+    R = rabbit_misc:r(VHost, queue, D),
+    get_dests_operators(VHost, T, DAT, DAF, DDT, ordsets:add_element(R,DDF));
+get_dests_operators(VHost, [{<<"x-dele-onfalse">>, longstr, D} | T], DAT,DAF,DDT,DDF) ->
+    R = rabbit_misc:r(VHost, exchange, D),
+    get_dests_operators(VHost, T, DAT, DAF, DDT, ordsets:add_element(R,DDF));
+get_dests_operators(VHost, [_ | T], DAT,DAF,DDT,DDF) ->
+    get_dests_operators(VHost, T, DAT,DAF,DDT,DDF).
+
+
+%%% DAT : Destinations to Add on True
+%%% DAF : Destinations to Add on False
+%get_dests_operators(VHost, Args) ->
+%    get_dests_operators(VHost, Args, ordsets:new(), ordsets:new()).
+%
+%get_dests_operators(_, [], DAT,DAF) -> {DAT,DAF};
+%get_dests_operators(VHost, [{<<"x-match-addq-ontrue">>, longstr, D} | T], DAT,DAF) ->
+%    R = rabbit_misc:r(VHost, queue, D),
+%    get_dests_operators(VHost, T, ordsets:add_element(R,DAT), DAF);
+%get_dests_operators(VHost, [{<<"x-match-adde-ontrue">>, longstr, D} | T], DAT,DAF) ->
+%    R = rabbit_misc:r(VHost, exchange, D),
+%    get_dests_operators(VHost, T, ordsets:add_element(R,DAT), DAF);
+%get_dests_operators(VHost, [{<<"x-match-addq-onfalse">>, longstr, D} | T], DAT,DAF) ->
+%    R = rabbit_misc:r(VHost, queue, D),
+%    get_dests_operators(VHost, T, DAT, ordsets:add_element(R,DAF));
+%get_dests_operators(VHost, [{<<"x-match-adde-onfalse">>, longstr, D} | T], DAT,DAF) ->
+%    R = rabbit_misc:r(VHost, exchange, D),
+%    get_dests_operators(VHost, T, DAT, ordsets:add_element(R,DAF));
+%get_dests_operators(VHost, [_ | T], DAT,DAF) ->
+%    get_dests_operators(VHost, T, DAT,DAF).
 
 
 %% Flatten one level for list of values (array)
@@ -465,43 +542,97 @@ delete(_, _, _) -> ok.
 
 policy_changed(_X1, _X2) -> ok.
 
+
 add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XName}, BindingToAdd = #binding{destination = Dest, args = BindingArgs}) ->
 % BindingId is used to track original binding definition so that it is used when deleting later
     BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
 % Let's doing that heavy lookup one time only
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
+    BindingOrder = get_binding_order(BindingArgs),
+    {GOT, GOF} = get_goto_operators(BindingArgs, {0, 0}),
+    StopOperators = get_stop_operators(BindingArgs, {0, 0}),
     FlattenedBindindArgs = flatten_binding_args(BindingArgs),
     MatchOperators = get_match_operators(FlattenedBindindArgs),
-    {DAT, DAF} = get_dests_operators(VHost, FlattenedBindindArgs),
-    CurrentBindings = case mnesia:read(rabbit_open_bindings, XName, write) of
+    {DAT, DAF, DDT, DDF} = get_dests_operators(VHost, FlattenedBindindArgs),
+    CurrentOrderedBindings = case mnesia:read(rabbit_open_bindings, XName, write) of
         [] -> [];
         [#open_bindings{bindings = E}] -> E
     end,
-    NewBinding = {BindingType, ordsets:add_element(Dest, DAT), DAF, MatchOperators, BindingId},
-    NewBindings = [NewBinding | CurrentBindings],
+    NewBinding = case {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF} of
+        {0, 0, {0, 0}, [], [], [], []} -> {BindingOrder, BindingType, Dest, MatchOperators, BindingId};
+        {_, _, _, [], [], [], []} -> {BindingOrder, BindingType, {GOT, GOF, StopOperators}, Dest, MatchOperators, BindingId};
+        _ -> {BindingOrder, BindingType, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF}, Dest, MatchOperators, BindingId}
+    end,
+    NewBindings = lists:keysort(1, [NewBinding | CurrentOrderedBindings]),
     NewRecord = #open_bindings{exchange_name = XName, bindings = NewBindings},
     ok = mnesia:write(rabbit_open_bindings, NewRecord, write);
 add_binding(_, _, _) ->
     ok.
 
+%add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XName}, BindingToAdd = #binding{destination = Dest, args = BindingArgs}) ->
+%% BindingId is used to track original binding definition so that it is used when deleting later
+%    BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
+%% Let's doing that heavy lookup one time only
+%    BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
+%    BindingOrder = get_binding_order(BindingArgs),
+%    {GOT, GOF} = get_goto_operators(BindingArgs, {0, 0}),
+%    FlattenedBindindArgs = flatten_binding_args(BindingArgs),
+%    MatchOperators = get_match_operators(FlattenedBindindArgs),
+%    {DAT, DAF} = get_dests_operators(VHost, FlattenedBindindArgs),
+%    CurrentBindings = case mnesia:read(rabbit_open_bindings, XName, write) of
+%        [] -> [];
+%        [#open_bindings{bindings = E}] -> E
+%    end,
+%    NewBinding = {BindingOrder, ZZ, BindingType, ordsets:add_element(Dest, DAT), DAF, MatchOperators, BindingId},
+%    NewBindings = [NewBinding | CurrentBindings],
+%    NewRecord = #open_bindings{exchange_name = XName, bindings = NewBindings},
+%    ok = mnesia:write(rabbit_open_bindings, NewRecord, write);
+%add_binding(_, _, _) ->
+%    ok.
+
 remove_bindings(transaction, #exchange{name = XName}, BindingsToDelete) ->
-    CurrentBindings = case mnesia:read(rabbit_open_bindings, XName, write) of
+    CurrentOrderedBindings = case mnesia:read(rabbit_open_bindings, XName, write) of
         [] -> [];
         [#open_bindings{bindings = E}] -> E
     end,
     BindingIdsToDelete = [crypto:hash(md5, term_to_binary(B)) || B <- BindingsToDelete],
-    NewBindings = remove_bindings_ids(BindingIdsToDelete, CurrentBindings, []),
-    NewRecord = #open_bindings{exchange_name = XName, bindings = NewBindings},
+    NewOrderedBindings = remove_bindings_ids(BindingIdsToDelete, CurrentOrderedBindings, []),
+    NewRecord = #open_bindings{exchange_name = XName, bindings = NewOrderedBindings},
     ok = mnesia:write(rabbit_open_bindings, NewRecord, write);
 remove_bindings(_, _, _) ->
     ok.
 
 remove_bindings_ids(_, [], Res) -> Res;
+remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,_,BId} | T], Res) ->
+    case lists:member(BId, BindingIdsToDelete) of
+        true -> remove_bindings_ids(BindingIdsToDelete, T, Res);
+        _    -> remove_bindings_ids(BindingIdsToDelete, T, lists:append(Res, [Bind]))
+    end;
 remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,BId} | T], Res) ->
     case lists:member(BId, BindingIdsToDelete) of
         true -> remove_bindings_ids(BindingIdsToDelete, T, Res);
         _    -> remove_bindings_ids(BindingIdsToDelete, T, lists:append(Res, [Bind]))
     end.
+
+
+%remove_bindings(transaction, #exchange{name = XName}, BindingsToDelete) ->
+%    CurrentBindings = case mnesia:read(rabbit_open_bindings, XName, write) of
+%        [] -> [];
+%        [#open_bindings{bindings = E}] -> E
+%    end,
+%    BindingIdsToDelete = [crypto:hash(md5, term_to_binary(B)) || B <- BindingsToDelete],
+%    NewBindings = remove_bindings_ids(BindingIdsToDelete, CurrentBindings, []),
+%    NewRecord = #open_bindings{exchange_name = XName, bindings = NewBindings},
+%    ok = mnesia:write(rabbit_open_bindings, NewRecord, write);
+%remove_bindings(_, _, _) ->
+%    ok.
+%
+%remove_bindings_ids(_, [], Res) -> Res;
+%remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,BId} | T], Res) ->
+%    case lists:member(BId, BindingIdsToDelete) of
+%        true -> remove_bindings_ids(BindingIdsToDelete, T, Res);
+%        _    -> remove_bindings_ids(BindingIdsToDelete, T, lists:append(Res, [Bind]))
+%    end.
 
 
 assert_args_equivalence(X, Args) ->
