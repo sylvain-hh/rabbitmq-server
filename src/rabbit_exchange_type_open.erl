@@ -45,7 +45,7 @@ description() ->
 serialise_events() -> false.
 
 route(#exchange{name = Name},
-      #delivery{message = #basic_message{content = Content}}) ->
+      #delivery{message = #basic_message{content = Content, routing_keys = [RK | _]}}) ->
     Headers = case (Content#content.properties)#'P_basic'.headers of
                   undefined -> [];
                   H         -> rabbit_misc:sort_field_table(H)
@@ -54,30 +54,38 @@ route(#exchange{name = Name},
         [] -> [];
         [#open_bindings{bindings = Bs}] -> Bs
     end,
-    get_routes(Headers, CurrentOrderedBindings, 0, ordsets:new()).
+    get_routes({RK, Headers}, CurrentOrderedBindings, 0, ordsets:new()).
+
+
+is_match(BindingType, MatchRk, RK, Args, Headers) ->
+    case BindingType of
+        all -> is_match_rk(BindingType, MatchRk, RK) andalso headers_match(BindingType, Args, Headers);
+        any -> is_match_rk(BindingType, MatchRk, RK) orelse headers_match(BindingType, Args, Headers);
+        _ -> erlang:error(whatsthattypeofbindingman)
+    end.
 
 get_routes(_, [], _, ResDests) -> ordsets:to_list(ResDests);
-get_routes(Headers, [ {_, BindingType, Dest, {Args, MatchRk}, _} | T ], _, ResDests) ->
-    case headers_match(BindingType, Args, Headers) of
-        true -> get_routes(Headers, T, 0, ordsets:add_element(Dest, ResDests));
-           _ -> get_routes(Headers, T, 0, ResDests)
+get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, _} | T ], _, ResDests) ->
+    case is_match(BindingType, MatchRk, RK, Args, Headers) of
+        true -> get_routes(Data, T, 0, ordsets:add_element(Dest, ResDests));
+           _ -> get_routes(Data, T, 0, ResDests)
     end;
 % Jump to the next binding satisfying the last goto operator
-get_routes(Headers, [ {Order, _, _, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
-    get_routes(Headers, T, GotoOrder, ResDests);
-get_routes(Headers, [ {_, BindingType, {GOT, GOF, StopOperators}, Dest, {Args, MatchRk}, _} | T ], _, ResDests) ->
-    case {headers_match(BindingType, Args, Headers), StopOperators} of
+get_routes(Data, [ {Order, _, _, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
+    get_routes(Data, T, GotoOrder, ResDests);
+get_routes(Data={RK, Headers}, [ {_, BindingType, {GOT, GOF, StopOperators}, Dest, {Args, MatchRk}, _} | T ], _, ResDests) ->
+    case {is_match(BindingType, MatchRk, RK, Args, Headers), StopOperators} of
         {true,{1,_}}  -> ordsets:add_element(Dest, ResDests);
         {false,{_,1}} -> ResDests;
-        {true,_}      -> get_routes(Headers, T, GOT, ordsets:add_element(Dest, ResDests));
-        {false,_}     -> get_routes(Headers, T, GOF, ResDests)
+        {true,_}      -> get_routes(Data, T, GOT, ordsets:add_element(Dest, ResDests));
+        {false,_}     -> get_routes(Data, T, GOF, ResDests)
     end;
-get_routes(Headers, [ {_, BindingType, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF}, Dest, {Args, MatchRk}, _} | T ], _, ResDests) ->
-    case {headers_match(BindingType, Args, Headers), StopOperators} of
+get_routes(Data={RK, Headers}, [ {_, BindingType, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF}, Dest, {Args, MatchRk}, _} | T ], _, ResDests) ->
+    case {is_match(BindingType, MatchRk, RK, Args, Headers), StopOperators} of
         {true,{1,_}}  -> ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT));
         {false,{_,1}} -> ordsets:union(DAF, ordsets:subtract(ResDests, DDF));
-        {true,_}      -> get_routes(Headers, T, GOT, ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT)));
-        {false,_}     -> get_routes(Headers, T, GOF, ordsets:union(DAF, ordsets:subtract(ResDests, DDF)))
+        {true,_}      -> get_routes(Data, T, GOT, ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT)));
+        {false,_}     -> get_routes(Data, T, GOF, ordsets:union(DAF, ordsets:subtract(ResDests, DDF)))
     end.
 
 %route(#exchange{name = Name},
@@ -187,8 +195,8 @@ validate_operators2([ {<<>>, _, _} | _ ]) ->
 %    validate_operators2(Tail);
 
 % Routing key ops
-validate_operators2([ {<<"x-?rk=">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?rk!=">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?rk=">>, longstr, <<_/binary>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?rk!=">>, longstr, <<_/binary>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-?rkre">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-?rk!re">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 
@@ -285,6 +293,69 @@ validate_regexes([ _ | Tail ]) ->
 parse_x_match({longstr, <<"all">>}) -> all;
 parse_x_match({longstr, <<"any">>}) -> any;
 parse_x_match(_)                    -> all.
+
+
+%
+% Check RK operators with current routing key from message
+%
+
+is_match_rk(all, Rules, RK) ->
+    is_match_rk_all(Rules, RK);
+is_match_rk(any, Rules, RK) ->
+    is_match_rk_any(Rules, RK).
+
+% With 'all' binding type
+% No (more) match to chek, return true
+is_match_rk_all([], _) -> true;
+% Case RK must be equal
+is_match_rk_all([ {rkeq, V} | Tail], RK) when V == RK ->
+    is_match_rk_all(Tail, RK);
+% Case RK must not be equal
+is_match_rk_all([ {rkne, V} | Tail], RK) when V /= RK ->
+    is_match_rk_all(Tail, RK);
+% Case RK must match regex
+is_match_rk_all([ {rkre, V} | Tail], RK) ->
+    case re:run(RK, V, [ {capture, none} ]) of
+        match -> is_match_rk_all(Tail, RK);
+        _ -> false
+    end;
+% Case RK must not match regex
+is_match_rk_all([ {rknre, V} | Tail], RK) ->
+    case re:run(RK, V, [ {capture, none} ]) of
+        match -> false;
+        _ -> is_match_rk_all(Tail, RK)
+    end;
+% rkeq or rkne are false..
+is_match_rk_all(_, _) ->
+    false.
+
+% With 'any' binding type
+% No (more) match to chek, return false
+is_match_rk_any([], _) -> false;
+% Case RK must be equal
+is_match_rk_any([ {rkeq, V} | _], RK) when V == RK -> true;
+% Case RK must not be equal
+is_match_rk_any([ {rkne, V} | _], RK) when V /= RK -> true;
+% Case RK must match regex
+is_match_rk_any([ {rkre, V} | Tail], RK) ->
+    case re:run(RK, V, [ {capture, none} ]) of
+        match -> true;
+        _ -> is_match_rk_any(Tail, RK)
+    end;
+% Case RK must not match regex
+is_match_rk_any([ {rknre, V} | Tail], RK) ->
+    case re:run(RK, V, [ {capture, none} ]) of
+        match -> is_match_rk_any(Tail, RK);
+        _ -> true
+    end;
+% rkeq or rkne are false..
+is_match_rk_any([ _ | Tail], RK) ->
+    is_match_rk_any(Tail, RK).
+
+
+
+
+
 
 %%
 %% !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -407,8 +478,8 @@ headers_match_any([_ | BNext], HCur) ->
     headers_match_any(BNext, HCur).
 
 
-get_match_operators(BindingArgs) ->
-    MatchOperators = get_match_operators(BindingArgs, []),
+get_match_hk_ops(BindingArgs) ->
+    MatchOperators = get_match_hk_ops(BindingArgs, []),
     rabbit_misc:sort_field_table(MatchOperators).
 
 
@@ -416,52 +487,52 @@ get_match_operators(BindingArgs) ->
 % We won't check types again as this has been done during validation..
 
 % Get match operators based on headers
-get_match_operators([], Result) -> Result;
+get_match_hk_ops([], Result) -> Result;
 % Does a key exist ?
-get_match_operators([ {<<"x-?hkex">>, _, V} | Tail ], Res) ->
-    get_match_operators (Tail, [ {V, ex, nil} | Res]);
+get_match_hk_ops([ {<<"x-?hkex">>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {V, ex, nil} | Res]);
 % Does a key NOT exist ?
-get_match_operators([ {<<"x-?hknx">>, _, V} | Tail ], Res) ->
-    get_match_operators (Tail, [ {V, nx, nil} | Res]);
+get_match_hk_ops([ {<<"x-?hknx">>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {V, nx, nil} | Res]);
 
 % operators <= < = != > >=
-get_match_operators([ {<<"x-?hkv<= ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_operators (Tail, [ {K, le, V} | Res]);
-get_match_operators([ {<<"x-?hkv< ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_operators (Tail, [ {K, lt, V} | Res]);
-get_match_operators([ {<<"x-?hkv= ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_operators (Tail, [ {K, eq, V} | Res]);
-get_match_operators([ {<<"x-?hkvre= ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_operators (Tail, [ {K, re, binary_to_list(V)} | Res]);
-get_match_operators([ {<<"x-?hkv!= ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_operators (Tail, [ {K, ne, V} | Res]);
-get_match_operators([ {<<"x-?hkvre!= ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_operators (Tail, [ {K, nre, binary_to_list(V)} | Res]);
-get_match_operators([ {<<"x-?hkv> ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_operators (Tail, [ {K, gt, V} | Res]);
-get_match_operators([ {<<"x-?hkv>= ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_operators (Tail, [ {K, ge, V} | Res]);
+get_match_hk_ops([ {<<"x-?hkv<= ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, le, V} | Res]);
+get_match_hk_ops([ {<<"x-?hkv< ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, lt, V} | Res]);
+get_match_hk_ops([ {<<"x-?hkv= ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, eq, V} | Res]);
+get_match_hk_ops([ {<<"x-?hkvre= ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, re, binary_to_list(V)} | Res]);
+get_match_hk_ops([ {<<"x-?hkv!= ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, ne, V} | Res]);
+get_match_hk_ops([ {<<"x-?hkvre!= ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, nre, binary_to_list(V)} | Res]);
+get_match_hk_ops([ {<<"x-?hkv> ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, gt, V} | Res]);
+get_match_hk_ops([ {<<"x-?hkv>= ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, ge, V} | Res]);
 
 %% We should not found here another header beginning with x-? !!!
 
 %% All others beginnig with x- are other operators
-get_match_operators([ {<<"x-", _/binary>>, _, _} | Tail ], Res) ->
-    get_match_operators (Tail, Res);
+get_match_hk_ops([ {<<"x-", _/binary>>, _, _} | Tail ], Res) ->
+    get_match_hk_ops (Tail, Res);
 % And for all other cases, the match operator is 'eq'
-get_match_operators([ {K, _, V} | T ], Res) ->
-    get_match_operators (T, [ {K, eq, V} | Res]).
+get_match_hk_ops([ {K, _, V} | T ], Res) ->
+    get_match_hk_ops (T, [ {K, eq, V} | Res]).
 
 
 % Get match operators related to routing key
 get_match_rk_ops([], Result) -> Result;
 
-get_match_rk_ops([ {<<"x-?rk=">>, _, V} | Tail ], Res) ->
+get_match_rk_ops([ {<<"x-?rk=">>, _, <<V/binary>>} | Tail ], Res) ->
     get_match_rk_ops(Tail, [ {rkeq, V} | Res]);
-get_match_rk_ops([ {<<"x-?rk!=">>, _, V} | Tail ], Res) ->
+get_match_rk_ops([ {<<"x-?rk!=">>, _, <<V/binary>>} | Tail ], Res) ->
     get_match_rk_ops(Tail, [ {rkne, V} | Res]);
-get_match_rk_ops([ {<<"x-?rkre">>, _, V} | Tail ], Res) ->
+get_match_rk_ops([ {<<"x-?rkre">>, _, <<V/binary>>} | Tail ], Res) ->
     get_match_rk_ops(Tail, [ {rkre, V} | Res]);
-get_match_rk_ops([ {<<"x-?rk!re">>, _, V} | Tail ], Res) ->
+get_match_rk_ops([ {<<"x-?rk!re">>, _, <<V/binary>>} | Tail ], Res) ->
     get_match_rk_ops(Tail, [ {rknre, V} | Res]);
 get_match_rk_ops([ _ | Tail ], Result) ->
     get_match_rk_ops(Tail, Result).
@@ -583,7 +654,8 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     {GOT, GOF} = get_goto_operators(BindingArgs, {0, 0}),
     StopOperators = get_stop_operators(BindingArgs, {0, 0}),
     FlattenedBindindArgs = flatten_binding_args(BindingArgs),
-    MatchOperators = get_match_operators(FlattenedBindindArgs),
+    MatchOperators = get_match_hk_ops(FlattenedBindindArgs),
+io:format("mo : ~p~n", [MatchOperators]),
     MatchRKOps = get_match_rk_ops(FlattenedBindindArgs, []),
     MatchOps = {MatchOperators, MatchRKOps},
     {DAT, DAF, DDT, DDF} = get_dests_operators(VHost, FlattenedBindindArgs),
@@ -610,7 +682,7 @@ add_binding(_, _, _) ->
 %    BindingOrder = get_binding_order(BindingArgs),
 %    {GOT, GOF} = get_goto_operators(BindingArgs, {0, 0}),
 %    FlattenedBindindArgs = flatten_binding_args(BindingArgs),
-%    MatchOperators = get_match_operators(FlattenedBindindArgs),
+%    MatchOperators = get_match_hk_ops(FlattenedBindindArgs),
 %    {DAT, DAF} = get_dests_operators(VHost, FlattenedBindindArgs),
 %    CurrentBindings = case mnesia:read(rabbit_open_bindings, XName, write) of
 %        [] -> [];
