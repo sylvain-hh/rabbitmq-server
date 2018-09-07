@@ -52,13 +52,12 @@ route(#exchange{name = Name},
               end,
     CurrentOrderedBindings = case ets:lookup(rabbit_open_bindings, Name) of
         [] -> [];
-        [#open_bindings{bindings = E}] -> E
+        [#open_bindings{bindings = Bs}] -> Bs
     end,
-io:format("Bindings : ~p~n", [CurrentOrderedBindings]),
     get_routes(Headers, CurrentOrderedBindings, 0, ordsets:new()).
 
 get_routes(_, [], _, ResDests) -> ordsets:to_list(ResDests);
-get_routes(Headers, [ {_, BindingType, Dest, Args, _} | T ], _, ResDests) ->
+get_routes(Headers, [ {_, BindingType, Dest, {Args, MatchRk}, _} | T ], _, ResDests) ->
     case headers_match(BindingType, Args, Headers) of
         true -> get_routes(Headers, T, 0, ordsets:add_element(Dest, ResDests));
            _ -> get_routes(Headers, T, 0, ResDests)
@@ -66,14 +65,14 @@ get_routes(Headers, [ {_, BindingType, Dest, Args, _} | T ], _, ResDests) ->
 % Jump to the next binding satisfying the last goto operator
 get_routes(Headers, [ {Order, _, _, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
     get_routes(Headers, T, GotoOrder, ResDests);
-get_routes(Headers, [ {_, BindingType, {GOT, GOF, StopOperators}, Dest, Args, _} | T ], _, ResDests) ->
+get_routes(Headers, [ {_, BindingType, {GOT, GOF, StopOperators}, Dest, {Args, MatchRk}, _} | T ], _, ResDests) ->
     case {headers_match(BindingType, Args, Headers), StopOperators} of
         {true,{1,_}}  -> ordsets:add_element(Dest, ResDests);
         {false,{_,1}} -> ResDests;
         {true,_}      -> get_routes(Headers, T, GOT, ordsets:add_element(Dest, ResDests));
         {false,_}     -> get_routes(Headers, T, GOF, ResDests)
     end;
-get_routes(Headers, [ {_, BindingType, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF}, Dest, Args, _} | T ], _, ResDests) ->
+get_routes(Headers, [ {_, BindingType, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF}, Dest, {Args, MatchRk}, _} | T ], _, ResDests) ->
     case {headers_match(BindingType, Args, Headers), StopOperators} of
         {true,{1,_}}  -> ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT));
         {false,{_,1}} -> ordsets:union(DAF, ordsets:subtract(ResDests, DDF));
@@ -129,13 +128,19 @@ validate_list_type_usage(BindingType, Args) ->
     validate_list_type_usage(BindingType, Args, Args).
 
 validate_list_type_usage(_, [], Args) -> validate_no_deep_lists(Args);
+% Routing key ops
+validate_list_type_usage(all, [ {<<"x-?rk=", _/binary>>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with routing key = operator with binding type 'all'", []}};
+validate_list_type_usage(any, [ {<<"x-?rk!=", _/binary>>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with routing key != operator with binding type 'any'", []}};
+ 
 validate_list_type_usage(all, [ {<<"x-?hkv= ", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with = operator with binding type 'all'", []}};
 validate_list_type_usage(any, [ {<<"x-?hkv!= ", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with != operator with binding type 'any'", []}};
 validate_list_type_usage(BindingType, [ {<< RuleKey/binary >>, array, _} | Tail ], Args) ->
     RKL = binary_to_list(RuleKey),
-    MatchOperators = ["x-?hkv<", "x-?hkv>", "x-?hk<", "x-?hk>", "x-?hkvre=", "x-?hkvre!="],
+    MatchOperators = ["x-?hkv<", "x-?hkv>", "x-?hk<", "x-?hk>", "x-?hkvre=", "x-?hkvre!=", "x-?rkre", "x-?rk!re"],
     case lists:filter(fun(S) -> lists:prefix(S, RKL) end, MatchOperators) of
         [] -> validate_list_type_usage(BindingType, Tail, Args);
         _ -> {error, {binding_invalid, "Invalid use of list type with comparison or regex operators", []}}
@@ -180,6 +185,13 @@ validate_operators2([ {<<>>, _, _} | _ ]) ->
 %validate_operators2([ { K, T, V } | Tail ]) ->
 %    io:format("K:~p T:~p V:~p~n", [K, T, V]),
 %    validate_operators2(Tail);
+
+% Routing key ops
+validate_operators2([ {<<"x-?rk=">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?rk!=">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?rkre">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?rk!re">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+
 validate_operators2([ {<<"x-?hkex">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-?hknx">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-addq-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
@@ -399,7 +411,11 @@ get_match_operators(BindingArgs) ->
     MatchOperators = get_match_operators(BindingArgs, []),
     rabbit_misc:sort_field_table(MatchOperators).
 
+
+% Get match operators
 % We won't check types again as this has been done during validation..
+
+% Get match operators based on headers
 get_match_operators([], Result) -> Result;
 % Does a key exist ?
 get_match_operators([ {<<"x-?hkex">>, _, V} | Tail ], Res) ->
@@ -434,6 +450,21 @@ get_match_operators([ {<<"x-", _/binary>>, _, _} | Tail ], Res) ->
 % And for all other cases, the match operator is 'eq'
 get_match_operators([ {K, _, V} | T ], Res) ->
     get_match_operators (T, [ {K, eq, V} | Res]).
+
+
+% Get match operators related to routing key
+get_match_rk_ops([], Result) -> Result;
+
+get_match_rk_ops([ {<<"x-?rk=">>, _, V} | Tail ], Res) ->
+    get_match_rk_ops(Tail, [ {rkeq, V} | Res]);
+get_match_rk_ops([ {<<"x-?rk!=">>, _, V} | Tail ], Res) ->
+    get_match_rk_ops(Tail, [ {rkne, V} | Res]);
+get_match_rk_ops([ {<<"x-?rkre">>, _, V} | Tail ], Res) ->
+    get_match_rk_ops(Tail, [ {rkre, V} | Res]);
+get_match_rk_ops([ {<<"x-?rk!re">>, _, V} | Tail ], Res) ->
+    get_match_rk_ops(Tail, [ {rknre, V} | Res]);
+get_match_rk_ops([ _ | Tail ], Result) ->
+    get_match_rk_ops(Tail, Result).
 
 
 % Validation is made upstream
@@ -553,15 +584,17 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     StopOperators = get_stop_operators(BindingArgs, {0, 0}),
     FlattenedBindindArgs = flatten_binding_args(BindingArgs),
     MatchOperators = get_match_operators(FlattenedBindindArgs),
+    MatchRKOps = get_match_rk_ops(FlattenedBindindArgs, []),
+    MatchOps = {MatchOperators, MatchRKOps},
     {DAT, DAF, DDT, DDF} = get_dests_operators(VHost, FlattenedBindindArgs),
     CurrentOrderedBindings = case mnesia:read(rabbit_open_bindings, XName, write) of
         [] -> [];
         [#open_bindings{bindings = E}] -> E
     end,
     NewBinding = case {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF} of
-        {0, 0, {0, 0}, [], [], [], []} -> {BindingOrder, BindingType, Dest, MatchOperators, BindingId};
-        {_, _, _, [], [], [], []} -> {BindingOrder, BindingType, {GOT, GOF, StopOperators}, Dest, MatchOperators, BindingId};
-        _ -> {BindingOrder, BindingType, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF}, Dest, MatchOperators, BindingId}
+        {0, 0, {0, 0}, [], [], [], []} -> {BindingOrder, BindingType, Dest, MatchOps, BindingId};
+        {_, _, _, [], [], [], []} -> {BindingOrder, BindingType, {GOT, GOF, StopOperators}, Dest, MatchOps, BindingId};
+        _ -> {BindingOrder, BindingType, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF}, Dest, MatchOps, BindingId}
     end,
     NewBindings = lists:keysort(1, [NewBinding | CurrentOrderedBindings]),
     NewRecord = #open_bindings{exchange_name = XName, bindings = NewBindings},
