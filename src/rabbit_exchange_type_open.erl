@@ -148,10 +148,10 @@ validate_list_type_usage(any, [ {<<"x-?hkv!= ", _/binary>>, array, _} | _ ], _) 
     {error, {binding_invalid, "Invalid use of list type with != operator with binding type 'any'", []}};
 validate_list_type_usage(BindingType, [ {<< RuleKey/binary >>, array, _} | Tail ], Args) ->
     RKL = binary_to_list(RuleKey),
-    MatchOperators = ["x-?hkv<", "x-?hkv>", "x-?hk<", "x-?hk>", "x-?hkvre=", "x-?hkvre!=", "x-?rkre", "x-?rk!re"],
+    MatchOperators = ["x-?hkv<", "x-?hkv>"],
     case lists:filter(fun(S) -> lists:prefix(S, RKL) end, MatchOperators) of
         [] -> validate_list_type_usage(BindingType, Tail, Args);
-        _ -> {error, {binding_invalid, "Invalid use of list type with comparison or regex operators", []}}
+        _ -> {error, {binding_invalid, "Invalid use of list type with < or > operators", []}}
     end;
 validate_list_type_usage(BindingType, [ _ | Tail ], Args) ->
     validate_list_type_usage(BindingType, Tail, Args).
@@ -237,9 +237,9 @@ validate_operators2([ {<<"x-?hkv> ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
 
 validate_operators2([ {<<"x-?hkv= ", ?ONE_CHAR_AT_LEAST>>, _, _} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkvre= ", ?ONE_CHAR_AT_LEAST>>, longstr, _} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkvre ", ?ONE_CHAR_AT_LEAST>>, longstr, _} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-?hkv!= ", ?ONE_CHAR_AT_LEAST>>, _, _} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkvre!= ", ?ONE_CHAR_AT_LEAST>>, longstr, _} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkv!re ", ?ONE_CHAR_AT_LEAST>>, longstr, _} | Tail ]) -> validate_operators2(Tail);
 
 validate_operators2([ {InvalidKey = <<"x-", _/binary>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Binding's key ~p cannot start with 'x-' in x-open exchange; use new operators to match such keys", [InvalidKey]}};
@@ -279,9 +279,9 @@ validate_regexes_item(RegexBin, Tail) ->
     end.
 
 validate_regexes([]) -> ok;
-validate_regexes([ {<< RuleKey:9/binary, _/binary >>, longstr, << RegexBin/binary >>} | Tail ]) when RuleKey==<<"x-?hkvre=">> ->
+validate_regexes([ {<< RuleKey:8/binary, _/binary >>, longstr, << RegexBin/binary >>} | Tail ]) when RuleKey==<<"x-?hkvre">> ->
     validate_regexes_item(RegexBin, Tail);
-validate_regexes([ {<< RuleKey:10/binary, _/binary >>, longstr, << RegexBin/binary >>} | Tail ]) when RuleKey==<<"x-?hkvre!=">> ->
+validate_regexes([ {<< RuleKey:9/binary, _/binary >>, longstr, << RegexBin/binary >>} | Tail ]) when RuleKey==<<"x-?hkv!re">> ->
     validate_regexes_item(RegexBin, Tail);
 validate_regexes([ _ | Tail ]) ->
         validate_regexes(Tail).
@@ -417,16 +417,16 @@ is_match_hkv_all([{_, le, BV} | BNext], HCur = [{_, _, HV} | _])
 is_match_hkv_all([{_, le, _} | _], _) -> false;
 
 % Regexes
-is_match_hkv_all([{_, re, BV} | BNext], [{_, longstr, HV} | HNext]) ->
+is_match_hkv_all([{_, re, BV} | BNext], HCur = [{_, longstr, HV} | _]) ->
     case re:run(HV, BV, [ {capture, none} ]) of
-        match -> is_match_hkv_all(BNext, HNext);
+        match -> is_match_hkv_all(BNext, HCur);
         _ -> false
     end;
 % Message header value is not a string : regex returns always false :
 is_match_hkv_all([{_, re, _} | _], _) -> false;
-is_match_hkv_all([{_, nre, BV} | BNext], [{_, longstr, HV} | HNext]) ->
+is_match_hkv_all([{_, nre, BV} | BNext], HCur = [{_, longstr, HV} | _]) ->
     case re:run(HV, BV, [ {capture, none} ]) of
-        nomatch -> is_match_hkv_all(BNext, HNext);
+        nomatch -> is_match_hkv_all(BNext, HCur);
         _ -> false
     end;
 % Message header value is not a string : regex returns always false :
@@ -502,11 +502,11 @@ get_match_hk_ops([ {<<"x-?hkv< ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {K, lt, V} | Res]);
 get_match_hk_ops([ {<<"x-?hkv= ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {K, eq, V} | Res]);
-get_match_hk_ops([ {<<"x-?hkvre= ", K/binary>>, _, V} | Tail ], Res) ->
+get_match_hk_ops([ {<<"x-?hkvre ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {K, re, binary_to_list(V)} | Res]);
 get_match_hk_ops([ {<<"x-?hkv!= ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {K, ne, V} | Res]);
-get_match_hk_ops([ {<<"x-?hkvre!= ", K/binary>>, _, V} | Tail ], Res) ->
+get_match_hk_ops([ {<<"x-?hkv!re ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {K, nre, binary_to_list(V)} | Res]);
 get_match_hk_ops([ {<<"x-?hkv> ", K/binary>>, _, V} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {K, gt, V} | Res]);
