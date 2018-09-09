@@ -59,8 +59,8 @@ route(#exchange{name = Name},
 
 is_match(BindingType, MatchRk, RK, Args, Headers) ->
     case BindingType of
-        all -> is_match_rk(BindingType, MatchRk, RK) andalso headers_match(BindingType, Args, Headers);
-        any -> is_match_rk(BindingType, MatchRk, RK) orelse headers_match(BindingType, Args, Headers);
+        all -> is_match_rk(BindingType, MatchRk, RK) andalso is_match_hkv(BindingType, Args, Headers);
+        any -> is_match_rk(BindingType, MatchRk, RK) orelse is_match_hkv(BindingType, Args, Headers);
         _ -> erlang:error(whatsthattypeofbindingman)
     end.
 
@@ -102,15 +102,15 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, {GOT, GOF, StopOperators, DAT,
 %
 %get_routes(_, [], ResDests) -> ordsets:to_list(ResDests);
 %get_routes(Headers, [ {BindingType, DAT, DAF, Args, _} | T ], ResDests) ->
-%    case headers_match(BindingType, Args, Headers) of
+%    case is_match_hkv(BindingType, Args, Headers) of
 %        true  -> get_routes(Headers, T, ordsets:union(DAT, ResDests));
 %        _ -> get_routes(Headers, T, ordsets:union(DAF, ResDests))
 %    end.
 
-headers_match(all, Args, Headers) ->
-    headers_match_all(Args, Headers);
-headers_match(any, Args, Headers) ->
-    headers_match_any(Args, Headers).
+is_match_hkv(all, Args, Headers) ->
+    is_match_hkv_all(Args, Headers);
+is_match_hkv(any, Args, Headers) ->
+    is_match_hkv_any(Args, Headers).
 
 
 validate_binding(_X, #binding{args = Args, key = << >>}) ->
@@ -366,116 +366,116 @@ is_match_rk_any([ _ | Tail], RK) ->
 %% Binding type 'all' match
 
 % No more match operator to check; return true
-headers_match_all([], _) -> true;
+is_match_hkv_all([], _) -> true;
 
 % Purge nx op on no data as all these are true
-headers_match_all([{_, nx, _} | BNext], []) ->
-    headers_match_all(BNext, []);
+is_match_hkv_all([{_, nx, _} | BNext], []) ->
+    is_match_hkv_all(BNext, []);
 
 % No more message header but still match operator to check; return false
-headers_match_all(_, []) -> false;
+is_match_hkv_all(_, []) -> false;
 
 % Current header key not in match operators; go next header with current match operator
-headers_match_all(BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
-    when BK > HK -> headers_match_all(BCur, HNext);
+is_match_hkv_all(BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
+    when BK > HK -> is_match_hkv_all(BCur, HNext);
 % Current binding key must not exist in data, go next binding
-headers_match_all([{BK, nx, _} | BNext], HCur = [{HK, _, _} | _])
-    when BK < HK -> headers_match_all(BNext, HCur);
+is_match_hkv_all([{BK, nx, _} | BNext], HCur = [{HK, _, _} | _])
+    when BK < HK -> is_match_hkv_all(BNext, HCur);
 % Current match operator does not exist in message; return false
-headers_match_all([{BK, _, _} | _], [{HK, _, _} | _])
+is_match_hkv_all([{BK, _, _} | _], [{HK, _, _} | _])
     when BK < HK -> false;
 %
 % From here, BK == HK (keys are the same)
 %
 % Current values must match and do match; ok go next
-headers_match_all([{_, eq, BV} | BNext], [{_, _, HV} | HNext])
-    when BV == HV -> headers_match_all(BNext, HNext);
+is_match_hkv_all([{_, eq, BV} | BNext], [{_, _, HV} | HNext])
+    when BV == HV -> is_match_hkv_all(BNext, HNext);
 % Current values must match but do not match; return false
-headers_match_all([{_, eq, _} | _], _) -> false;
+is_match_hkv_all([{_, eq, _} | _], _) -> false;
 % Key must not exist, return false
-headers_match_all([{_, nx, _} | _], _) -> false;
+is_match_hkv_all([{_, nx, _} | _], _) -> false;
 % Current header key must exist; ok go next
-headers_match_all([{_, ex, _} | BNext], [ _ | HNext]) ->
-    headers_match_all(BNext, HNext);
+is_match_hkv_all([{_, ex, _} | BNext], [ _ | HNext]) ->
+    is_match_hkv_all(BNext, HNext);
 % <= < = != > >=
-headers_match_all([{_, ne, BV} | BNext], HCur = [{_, _, HV} | _])
-    when BV /= HV -> headers_match_all(BNext, HCur);
-headers_match_all([{_, ne, _} | _], _) -> false;
+is_match_hkv_all([{_, ne, BV} | BNext], HCur = [{_, _, HV} | _])
+    when BV /= HV -> is_match_hkv_all(BNext, HCur);
+is_match_hkv_all([{_, ne, _} | _], _) -> false;
 
 % Thanks to validation done upstream, gt/ge/lt/le are done only for numeric
-headers_match_all([{_, gt, BV} | BNext], HCur = [{_, _, HV} | _])
-    when is_number(HV), HV > BV -> headers_match_all(BNext, HCur);
-headers_match_all([{_, gt, _} | _], _) -> false;
-headers_match_all([{_, ge, BV} | BNext], HCur = [{_, _, HV} | _])
-    when is_number(HV), HV >= BV -> headers_match_all(BNext, HCur);
-headers_match_all([{_, ge, _} | _], _) -> false;
-headers_match_all([{_, lt, BV} | BNext], HCur = [{_, _, HV} | _])
-    when is_number(HV), HV < BV -> headers_match_all(BNext, HCur);
-headers_match_all([{_, lt, _} | _], _) -> false;
-headers_match_all([{_, le, BV} | BNext], HCur = [{_, _, HV} | _])
-    when is_number(HV), HV =< BV -> headers_match_all(BNext, HCur);
-headers_match_all([{_, le, _} | _], _) -> false;
+is_match_hkv_all([{_, gt, BV} | BNext], HCur = [{_, _, HV} | _])
+    when is_number(HV), HV > BV -> is_match_hkv_all(BNext, HCur);
+is_match_hkv_all([{_, gt, _} | _], _) -> false;
+is_match_hkv_all([{_, ge, BV} | BNext], HCur = [{_, _, HV} | _])
+    when is_number(HV), HV >= BV -> is_match_hkv_all(BNext, HCur);
+is_match_hkv_all([{_, ge, _} | _], _) -> false;
+is_match_hkv_all([{_, lt, BV} | BNext], HCur = [{_, _, HV} | _])
+    when is_number(HV), HV < BV -> is_match_hkv_all(BNext, HCur);
+is_match_hkv_all([{_, lt, _} | _], _) -> false;
+is_match_hkv_all([{_, le, BV} | BNext], HCur = [{_, _, HV} | _])
+    when is_number(HV), HV =< BV -> is_match_hkv_all(BNext, HCur);
+is_match_hkv_all([{_, le, _} | _], _) -> false;
 
 % Regexes
-headers_match_all([{_, re, BV} | BNext], [{_, longstr, HV} | HNext]) ->
+is_match_hkv_all([{_, re, BV} | BNext], [{_, longstr, HV} | HNext]) ->
     case re:run(HV, BV, [ {capture, none} ]) of
-        match -> headers_match_all(BNext, HNext);
+        match -> is_match_hkv_all(BNext, HNext);
         _ -> false
     end;
 % Message header value is not a string : regex returns always false :
-headers_match_all([{_, re, _} | _], _) -> false;
-headers_match_all([{_, nre, BV} | BNext], [{_, longstr, HV} | HNext]) ->
+is_match_hkv_all([{_, re, _} | _], _) -> false;
+is_match_hkv_all([{_, nre, BV} | BNext], [{_, longstr, HV} | HNext]) ->
     case re:run(HV, BV, [ {capture, none} ]) of
-        nomatch -> headers_match_all(BNext, HNext);
+        nomatch -> is_match_hkv_all(BNext, HNext);
         _ -> false
     end;
 % Message header value is not a string : regex returns always false :
-headers_match_all([{_, nre, _} | _], _) -> false.
+is_match_hkv_all([{_, nre, _} | _], _) -> false.
 
 
 
 %% Binding type 'any' match
 
 % No more match operator to check; return false
-headers_match_any([], _) -> false;
+is_match_hkv_any([], _) -> false;
 % No more message header but still match operator to check; return false
-headers_match_any(_, []) -> false;
+is_match_hkv_any(_, []) -> false;
 % Current header key not in match operators; go next header with current match operator
-headers_match_any(BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
-    when BK > HK -> headers_match_any(BCur, HNext);
+is_match_hkv_any(BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
+    when BK > HK -> is_match_hkv_any(BCur, HNext);
 % Current binding key must not exist in data, return true
-headers_match_any([{BK, nx, _} | _], [{HK, _, _} | _])
+is_match_hkv_any([{BK, nx, _} | _], [{HK, _, _} | _])
     when BK < HK -> true;
 % Current binding key does not exist in message; go next binding
-headers_match_any([{BK, _, _} | BNext], HCur = [{HK, _, _} | _])
-    when BK < HK -> headers_match_any(BNext, HCur);
+is_match_hkv_any([{BK, _, _} | BNext], HCur = [{HK, _, _} | _])
+    when BK < HK -> is_match_hkv_any(BNext, HCur);
 %
 % From here, BK == HK
 %
 % Current values must match and do match; return true
-headers_match_any([{_, eq, BV} | _], [{_, _, HV} | _]) when BV == HV -> true;
+is_match_hkv_any([{_, eq, BV} | _], [{_, _, HV} | _]) when BV == HV -> true;
 % Current header key must exist; return true
-headers_match_any([{_, ex, _} | _], _) -> true;
-headers_match_any([{_, ne, BV} | _], [{_, _, HV} | _]) when HV /= BV -> true;
-headers_match_any([{_, gt, BV} | _], [{_, _, HV} | _]) when HV > BV -> true;
-headers_match_any([{_, ge, BV} | _], [{_, _, HV} | _]) when HV >= BV -> true;
-headers_match_any([{_, lt, BV} | _], [{_, _, HV} | _]) when HV < BV -> true;
-headers_match_any([{_, le, BV} | _], [{_, _, HV} | _]) when HV =< BV -> true;
+is_match_hkv_any([{_, ex, _} | _], _) -> true;
+is_match_hkv_any([{_, ne, BV} | _], [{_, _, HV} | _]) when HV /= BV -> true;
+is_match_hkv_any([{_, gt, BV} | _], [{_, _, HV} | _]) when HV > BV -> true;
+is_match_hkv_any([{_, ge, BV} | _], [{_, _, HV} | _]) when HV >= BV -> true;
+is_match_hkv_any([{_, lt, BV} | _], [{_, _, HV} | _]) when HV < BV -> true;
+is_match_hkv_any([{_, le, BV} | _], [{_, _, HV} | _]) when HV =< BV -> true;
 
 % Regexes
-headers_match_any([{_, re, BV} | BNext], HCur = [ {_, longstr, HV} | _]) ->
+is_match_hkv_any([{_, re, BV} | BNext], HCur = [ {_, longstr, HV} | _]) ->
     case re:run(HV, BV, [ {capture, none} ]) of
         match -> true;
-        _ -> headers_match_any(BNext, HCur)
+        _ -> is_match_hkv_any(BNext, HCur)
     end;
-headers_match_any([{_, nre, BV} | BNext], HCur = [ {_, longstr, HV} | _]) ->
+is_match_hkv_any([{_, nre, BV} | BNext], HCur = [ {_, longstr, HV} | _]) ->
     case re:run(HV, BV, [ {capture, none} ]) of
-        match -> headers_match_any(BNext, HCur);
+        match -> is_match_hkv_any(BNext, HCur);
         _ -> true
     end;
 % No match yet; go next
-headers_match_any([_ | BNext], HCur) ->
-    headers_match_any(BNext, HCur).
+is_match_hkv_any([_ | BNext], HCur) ->
+    is_match_hkv_any(BNext, HCur).
 
 
 get_match_hk_ops(BindingArgs) ->
