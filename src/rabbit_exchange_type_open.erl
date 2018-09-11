@@ -115,24 +115,6 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, {GOT, G
         {false,_}     -> get_routes(Data, T, GOF, ordsets:union(ordsets:union([DAF,DAFREsult]), ordsets:subtract(ResDests, ordsets:union([DDF,DDFREsult]))))
     end.
 
-%route(#exchange{name = Name},
-%      #delivery{message = #basic_message{content = Content}}) ->
-%    Headers = case (Content#content.properties)#'P_basic'.headers of
-%                  undefined -> [];
-%                  H         -> rabbit_misc:sort_field_table(H)
-%              end,
-%    CurrentBindings = case ets:lookup(rabbit_open_bindings, Name) of
-%        [] -> [];
-%        [#open_bindings{bindings = E}] -> E
-%    end,
-%    get_routes(Headers, CurrentBindings, ordsets:new()).
-%
-%get_routes(_, [], ResDests) -> ordsets:to_list(ResDests);
-%get_routes(Headers, [ {BindingType, DAT, DAF, Args, _} | T ], ResDests) ->
-%    case is_match_hkv(BindingType, Args, Headers) of
-%        true  -> get_routes(Headers, T, ordsets:union(DAT, ResDests));
-%        _ -> get_routes(Headers, T, ordsets:union(DAF, ResDests))
-%    end.
 
 is_match_hkv(all, Args, Headers) ->
     is_match_hkv_all(Args, Headers);
@@ -202,9 +184,7 @@ validate_no_deep_lists([ _ | Tail ], _, Args) ->
 %% Binding is INvalidated if some rule does not match anything,
 %%  so that we can't have some "unexpected" results
 validate_operators(Args) ->
-    io:format("A:~p~n", [Args]),
   FlattenedArgs = flatten_binding_args(Args),
-    io:format("F:~p~n", [FlattenedArgs]),
   case validate_operators2(FlattenedArgs) of
     ok -> validate_regexes(Args);
     Err -> Err
@@ -217,9 +197,6 @@ validate_operators2([ {<<"x-match">>, longstr, _} | Tail ]) -> validate_operator
 % Do not think that can't happen... it can ! :)
 validate_operators2([ {<<>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Binding's rule key can't be void", []}};
-%validate_operators2([ { K, T, V } | Tail ]) ->
-%    io:format("K:~p T:~p V:~p~n", [K, T, V]),
-%    validate_operators2(Tail);
 
 % Routing key ops
 validate_operators2([ {<<"x-?rk=">>, longstr, <<_/binary>>} | Tail ]) -> validate_operators2(Tail);
@@ -272,32 +249,6 @@ validate_operators2([ {<<"x-?hkv!re ", ?ONE_CHAR_AT_LEAST>>, longstr, _} | Tail 
 validate_operators2([ {InvalidKey = <<"x-", _/binary>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Binding's key ~p cannot start with 'x-' in x-open exchange; use new operators to match such keys", [InvalidKey]}};
 validate_operators2([ _ | Tail ]) -> validate_operators2(Tail).
-
-
-%validate_all_keys_are_printable([]) -> ok;
-%validate_all_keys_are_printable([ {K, _, _} | Tail ]) ->
-%    case io_lib:printable_unicode_list(unicode:characters_to_list(V)) of
-%        true -> io:format("true~n", []), validate_operators2(Tail);
-%        _ -> io:format("false~n", []), {error, {binding_invalid, "Type's value of comparison's operators must be string or numeric", []}}
-%    end;
-%validate_operators2([ {<<"x-hkv?<= ", ?ONE_CHAR_AT_LEAST>>, _, V} | Tail ]) when is_number(V) -> validate_operators2(Tail);
-%validate_operators2([ {<<"x-hkv?<= ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
-%    {error, {binding_invalid, "Type's value of comparison's operators must be string or numeric", []}};
-
-
-
-%validate_regexes([]) -> ok;
-%validate_regexes([ {<<"x-hkvre?=", _/binary>>, _, << RegexBin/binary >>} | Tail ]) ->
-%    case re:compile(RegexBin) of
-%        {ok, _} -> validate_regexes(Tail);
-%        {error, _} -> {error, {binding_invalid, "Regex '~ts' is invalid", [RegexBin]}}
-%    end;
-%validate_regexes([ {<<"x-hkvre?!=", _/binary>>, _, << RegexBin/binary >>} | Tail ]) ->
-%    case re:compile(Regex) of
-%        {ok, _} -> validate_regexes(Tail);
-%        {error, _} -> {error, {binding_invalid, "Regex '~ts' is invalid", [RegexBin]}}
-%    end;
-%validate_regexes([ _ | Tail ]) -> validate_regexes(Tail).
 
 
 validate_regexes_item(RegexBin, Tail) ->
@@ -639,28 +590,6 @@ get_dests_operators(VHost, [_ | T], Dests, DestsRE) ->
     get_dests_operators(VHost, T, Dests, DestsRE).
 
 
-%%% DAT : Destinations to Add on True
-%%% DAF : Destinations to Add on False
-%get_dests_operators(VHost, Args) ->
-%    get_dests_operators(VHost, Args, ordsets:new(), ordsets:new()).
-%
-%get_dests_operators(_, [], DAT,DAF) -> {DAT,DAF};
-%get_dests_operators(VHost, [{<<"x-match-addq-ontrue">>, longstr, D} | T], DAT,DAF) ->
-%    R = rabbit_misc:r(VHost, queue, D),
-%    get_dests_operators(VHost, T, ordsets:add_element(R,DAT), DAF);
-%get_dests_operators(VHost, [{<<"x-match-adde-ontrue">>, longstr, D} | T], DAT,DAF) ->
-%    R = rabbit_misc:r(VHost, exchange, D),
-%    get_dests_operators(VHost, T, ordsets:add_element(R,DAT), DAF);
-%get_dests_operators(VHost, [{<<"x-match-addq-onfalse">>, longstr, D} | T], DAT,DAF) ->
-%    R = rabbit_misc:r(VHost, queue, D),
-%    get_dests_operators(VHost, T, DAT, ordsets:add_element(R,DAF));
-%get_dests_operators(VHost, [{<<"x-match-adde-onfalse">>, longstr, D} | T], DAT,DAF) ->
-%    R = rabbit_misc:r(VHost, exchange, D),
-%    get_dests_operators(VHost, T, DAT, ordsets:add_element(R,DAF));
-%get_dests_operators(VHost, [_ | T], DAT,DAF) ->
-%    get_dests_operators(VHost, T, DAT,DAF).
-
-
 %% Flatten one level for list of values (array)
 flatten_binding_args(Args) ->
     flatten_binding_args(Args, []).
@@ -684,8 +613,6 @@ policy_changed(_X1, _X2) -> ok.
 
 
 add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XName}, BindingToAdd = #binding{destination = Dest, args = BindingArgs}) ->
-io:format("vh: ~p~n", [VHost]),
-io:format("xn: ~p~n", [XName]),
 % BindingId is used to track original binding definition so that it is used when deleting later
     BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
 % Let's doing that heavy lookup one time only
@@ -715,26 +642,6 @@ io:format("xn: ~p~n", [XName]),
 add_binding(_, _, _) ->
     ok.
 
-%add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XName}, BindingToAdd = #binding{destination = Dest, args = BindingArgs}) ->
-%% BindingId is used to track original binding definition so that it is used when deleting later
-%    BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
-%% Let's doing that heavy lookup one time only
-%    BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
-%    BindingOrder = get_binding_order(BindingArgs),
-%    {GOT, GOF} = get_goto_operators(BindingArgs, {0, 0}),
-%    FlattenedBindindArgs = flatten_binding_args(BindingArgs),
-%    MatchOperators = get_match_hk_ops(FlattenedBindindArgs),
-%    {DAT, DAF} = get_dests_operators(VHost, FlattenedBindindArgs),
-%    CurrentBindings = case mnesia:read(rabbit_open_bindings, XName, write) of
-%        [] -> [];
-%        [#open_bindings{bindings = E}] -> E
-%    end,
-%    NewBinding = {BindingOrder, ZZ, BindingType, ordsets:add_element(Dest, DAT), DAF, MatchOperators, BindingId},
-%    NewBindings = [NewBinding | CurrentBindings],
-%    NewRecord = #open_bindings{exchange_name = XName, bindings = NewBindings},
-%    ok = mnesia:write(rabbit_open_bindings, NewRecord, write);
-%add_binding(_, _, _) ->
-%    ok.
 
 remove_bindings(transaction, #exchange{name = XName}, BindingsToDelete) ->
     CurrentOrderedBindings = case mnesia:read(rabbit_open_bindings, XName, write) of
@@ -759,26 +666,6 @@ remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,BId} | T], Res) ->
         true -> remove_bindings_ids(BindingIdsToDelete, T, Res);
         _    -> remove_bindings_ids(BindingIdsToDelete, T, lists:append(Res, [Bind]))
     end.
-
-
-%remove_bindings(transaction, #exchange{name = XName}, BindingsToDelete) ->
-%    CurrentBindings = case mnesia:read(rabbit_open_bindings, XName, write) of
-%        [] -> [];
-%        [#open_bindings{bindings = E}] -> E
-%    end,
-%    BindingIdsToDelete = [crypto:hash(md5, term_to_binary(B)) || B <- BindingsToDelete],
-%    NewBindings = remove_bindings_ids(BindingIdsToDelete, CurrentBindings, []),
-%    NewRecord = #open_bindings{exchange_name = XName, bindings = NewBindings},
-%    ok = mnesia:write(rabbit_open_bindings, NewRecord, write);
-%remove_bindings(_, _, _) ->
-%    ok.
-%
-%remove_bindings_ids(_, [], Res) -> Res;
-%remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,BId} | T], Res) ->
-%    case lists:member(BId, BindingIdsToDelete) of
-%        true -> remove_bindings_ids(BindingIdsToDelete, T, Res);
-%        _    -> remove_bindings_ids(BindingIdsToDelete, T, lists:append(Res, [Bind]))
-%    end.
 
 
 assert_args_equivalence(X, Args) ->
