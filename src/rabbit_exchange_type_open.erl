@@ -79,14 +79,14 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, {GOT, G
         {true,_}      -> get_routes(Data, T, GOT, ordsets:add_element(Dest, ResDests));
         {false,_}     -> get_routes(Data, T, GOF, ResDests)
     end;
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, nil, nil, nil, nil}, _} | T ], _, ResDests) ->
+get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, nil, nil, nil, nil, nil, nil, nil, nil}, _} | T ], _, ResDests) ->
     case {is_match(BindingType, MatchRk, RK, Args, Headers), StopOperators} of
         {true,{1,_}}  -> ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT));
         {false,{_,1}} -> ordsets:union(DAF, ordsets:subtract(ResDests, DDF));
         {true,_}      -> get_routes(Data, T, GOT, ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT)));
         {false,_}     -> get_routes(Data, T, GOF, ordsets:union(DAF, ordsets:subtract(ResDests, DDF)))
     end;
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, VHost, DATRE, DAFRE, DDTRE, DDFRE}, _} | T ], _, ResDests) ->
+get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, VHost, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE}, _} | T ], _, ResDests) ->
 % May I use ets:tab2list here ?..... I don't know.
 % And yes, maybe there is a cleaner way to list queues :)
     AllQueues = mnesia:dirty_all_keys(rabbit_queue),
@@ -108,11 +108,27 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, {GOT, G
         nil -> [];
         _ -> [Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDFRE, [ {capture, none} ]) == match]
     end,
+    DATNREsult = case DATNRE of
+        nil -> [];
+        _ -> [Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DATNRE, [ {capture, none} ]) /= match]
+    end,
+    DAFNREsult = case DAFNRE of
+        nil -> [];
+        _ -> [Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DAFNRE, [ {capture, none} ]) /= match]
+    end,
+    DDTNREsult = case DDTNRE of
+        nil -> [];
+        _ -> [Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDTNRE, [ {capture, none} ]) /= match]
+    end,
+    DDFNREsult = case DDFNRE of
+        nil -> [];
+        _ -> [Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDFNRE, [ {capture, none} ]) /= match]
+    end,
     case {is_match(BindingType, MatchRk, RK, Args, Headers), StopOperators} of
-        {true,{1,_}}  -> ordsets:union(ordsets:union([DAT,DATREsult]), ordsets:subtract(ordsets:add_element(Dest, ResDests), ordsets:union([DDT,DDTREsult])));
-        {false,{_,1}} -> ordsets:union(ordsets:union([DAF,DAFREsult]), ordsets:subtract(ResDests, ordsets:union([DDF,DDFREsult])));
-        {true,_}      -> get_routes(Data, T, GOT, ordsets:union(ordsets:union([DAT,DATREsult]), ordsets:subtract(ordsets:add_element(Dest, ResDests), ordsets:union([DDT,DDTREsult]))));
-        {false,_}     -> get_routes(Data, T, GOF, ordsets:union(ordsets:union([DAF,DAFREsult]), ordsets:subtract(ResDests, ordsets:union([DDF,DDFREsult]))))
+        {true,{1,_}}  -> ordsets:union(ordsets:union([DAT,DATREsult,DATNREsult]), ordsets:subtract(ordsets:add_element(Dest, ResDests), ordsets:union([DDT,DDTREsult,DDTNREsult])));
+        {false,{_,1}} -> ordsets:union(ordsets:union([DAF,DAFREsult,DAFNREsult]), ordsets:subtract(ResDests, ordsets:union([DDF,DDFREsult,DDFNREsult])));
+        {true,_}      -> get_routes(Data, T, GOT, ordsets:union(ordsets:union([DAT,DATREsult,DATNREsult]), ordsets:subtract(ordsets:add_element(Dest, ResDests), ordsets:union([DDT,DDTREsult,DDTNREsult]))));
+        {false,_}     -> get_routes(Data, T, GOF, ordsets:union(ordsets:union([DAF,DAFREsult,DAFNREsult]), ordsets:subtract(ResDests, ordsets:union([DDF,DDFREsult,DDFNREsult]))))
     end.
 
 
@@ -206,15 +222,25 @@ validate_operators2([ {<<"x-?rk!re">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]
 
 validate_operators2([ {<<"x-?hkex">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-?hknx">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-addq-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-addqre-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-addq-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+
+% Dests ops (exchanges)
 validate_operators2([ {<<"x-adde-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-adde-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-delq-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-delq-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-dele-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-dele-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+% Dests ops (queues)
+validate_operators2([ {<<"x-addq-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-addqre-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-addq!re-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-addq-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-addqre-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-addq!re-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-delq-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-delqre-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-delq!re-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-delq-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-delqre-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-delq!re-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 
 % Binding order is numeric only
 validate_operators2([ {<<"x-order">>, _, V} | Tail ]) when is_integer(V) -> validate_operators2(Tail);
@@ -258,9 +284,9 @@ validate_regexes_item(RegexBin, Tail) ->
     end.
 
 validate_regexes([]) -> ok;
-validate_regexes([ {<< RuleKey:8/binary, _/binary >>, longstr, << RegexBin/binary >>} | Tail ]) when RuleKey==<<"x-?hkvre">> ->
+validate_regexes([ {<< RuleKey:8/binary, _/binary >>, longstr, << RegexBin/binary >>} | Tail ]) when RuleKey==<<"x-?hkvre">> ; RuleKey==<<"x-addqre">> ; RuleKey==<<"x-delqre">> ->
     validate_regexes_item(RegexBin, Tail);
-validate_regexes([ {<< RuleKey:9/binary, _/binary >>, longstr, << RegexBin/binary >>} | Tail ]) when RuleKey==<<"x-?hkv!re">> ->
+validate_regexes([ {<< RuleKey:9/binary, _/binary >>, longstr, << RegexBin/binary >>} | Tail ]) when RuleKey==<<"x-?hkv!re">> ; RuleKey==<<"x-addq!re">> ; RuleKey==<<"x-delq!re">> ->
     validate_regexes_item(RegexBin, Tail);
 validate_regexes([ _ | Tail ]) ->
         validate_regexes(Tail).
@@ -550,7 +576,7 @@ get_goto_operators([_ | T], R) ->
 % They are resource's names or regex
 get_dests_operators(VHost, Args) ->
     OS = ordsets:new(),
-    get_dests_operators(VHost, Args, {OS, OS, OS, OS}, {nil, nil, nil, nil}).
+    get_dests_operators(VHost, Args, {OS, OS, OS, OS}, {nil, nil, nil, nil, nil, nil, nil, nil}).
 
 get_dests_operators(_, [], Dests, DestsRE) -> {Dests, DestsRE};
 get_dests_operators(VHost, [{<<"x-addq-ontrue">>, longstr, D} | T], {DAT,DAF,DDT,DDF}, DestsRE) ->
@@ -578,14 +604,23 @@ get_dests_operators(VHost, [{<<"x-dele-onfalse">>, longstr, D} | T], {DAT,DAF,DD
     R = rabbit_misc:r(VHost, exchange, D),
     get_dests_operators(VHost, T, {DAT, DAF, DDT, ordsets:add_element(R,DDF)}, DestsRE);
 % Regex part
-get_dests_operators(VHost, [{<<"x-addqre-ontrue">>, longstr, R} | T], Dests, {_,DAF,DDT,DDF}) ->
-    get_dests_operators(VHost, T, Dests, {R, DAF, DDT, DDF});
-get_dests_operators(VHost, [{<<"x-addqre-onfalse">>, longstr, R} | T], Dests, {DAT,_,DDT,DDF}) ->
-    get_dests_operators(VHost, T, Dests, {DAT, R, DDT, DDF});
-get_dests_operators(VHost, [{<<"x-delqre-ontrue">>, longstr, R} | T], Dests, {DAT,DAF,_,DDF}) ->
-    get_dests_operators(VHost, T, Dests, {DAT, DAF, R, DDF});
-get_dests_operators(VHost, [{<<"x-delqre-onfalse">>, longstr, R} | T], Dests, {DAT,DAF,DDT,_}) ->
-    get_dests_operators(VHost, T, Dests, {DAT, DAF, DDT, R});
+get_dests_operators(VHost, [{<<"x-addqre-ontrue">>, longstr, R} | T], Dests, {_,DAFRE,DDTRE,DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE}) ->
+    get_dests_operators(VHost, T, Dests, {R, DAFRE, DDTRE, DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE});
+get_dests_operators(VHost, [{<<"x-addqre-onfalse">>, longstr, R} | T], Dests, {DATRE,_,DDTRE,DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE}) ->
+    get_dests_operators(VHost, T, Dests, {DATRE, R, DDTRE, DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE});
+get_dests_operators(VHost, [{<<"x-delqre-ontrue">>, longstr, R} | T], Dests, {DATRE,DAFRE,_,DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE}) ->
+    get_dests_operators(VHost, T, Dests, {DATRE, DAFRE, R, DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE});
+get_dests_operators(VHost, [{<<"x-delqre-onfalse">>, longstr, R} | T], Dests, {DATRE,DAFRE,DDTRE,_,DATNRE,DAFNRE,DDTNRE,DDFNRE}) ->
+    get_dests_operators(VHost, T, Dests, {DATRE, DAFRE, DDTRE, R,DATNRE,DAFNRE,DDTNRE,DDFNRE});
+
+get_dests_operators(VHost, [{<<"x-addq!re-ontrue">>, longstr, R} | T], Dests, {DATRE,DAFRE,DDTRE,DDFRE,_,DAFNRE,DDTNRE,DDFNRE}) ->
+    get_dests_operators(VHost, T, Dests, {DATRE, DAFRE, DDTRE, DDFRE,R,DAFNRE,DDTNRE,DDFNRE});
+get_dests_operators(VHost, [{<<"x-addq!re-onfalse">>, longstr, R} | T], Dests, {DATRE,DAFRE,DDTRE,DDFRE,DATNRE,_,DDTNRE,DDFNRE}) ->
+    get_dests_operators(VHost, T, Dests, {DATRE, DAFRE, DDTRE, DDFRE,DATNRE,R,DDTNRE,DDFNRE});
+get_dests_operators(VHost, [{<<"x-delq!re-ontrue">>, longstr, R} | T], Dests, {DATRE,DAFRE,DDTRE,DDFRE,DATNRE,DAFNRE,_,DDFNRE}) ->
+    get_dests_operators(VHost, T, Dests, {DATRE, DAFRE, DDTRE, DDFRE,DATNRE,DAFNRE,R,DDFNRE});
+get_dests_operators(VHost, [{<<"x-delq!re-onfalse">>, longstr, R} | T], Dests, {DATRE,DAFRE,DDTRE,DDFRE,DATNRE,DAFNRE,DDTNRE,_}) ->
+    get_dests_operators(VHost, T, Dests, {DATRE, DAFRE, DDTRE, DDFRE,DATNRE,DAFNRE,DDTNRE,R});
 get_dests_operators(VHost, [_ | T], Dests, DestsRE) ->
     get_dests_operators(VHost, T, Dests, DestsRE).
 
@@ -624,16 +659,16 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     MatchHKOps = get_match_hk_ops(FlattenedBindindArgs),
     MatchRKOps = get_match_rk_ops(FlattenedBindindArgs, []),
     MatchOps = {MatchHKOps, MatchRKOps},
-    {{DAT, DAF, DDT, DDF}, {DATRE, DAFRE, DDTRE, DDFRE}} = get_dests_operators(VHost, FlattenedBindindArgs),
+    {{DAT, DAF, DDT, DDF}, {DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE}} = get_dests_operators(VHost, FlattenedBindindArgs),
     CurrentOrderedBindings = case mnesia:read(rabbit_open_bindings, XName, write) of
         [] -> [];
         [#open_bindings{bindings = E}] -> E
     end,
     NewBinding1 = {BindingOrder, BindingType, Dest, MatchOps},
-    NewBinding2 = case {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, DATRE, DAFRE, DDTRE, DDFRE} of
-        {0, 0, {0, 0}, [], [], [], [], nil, nil, nil, nil} -> NewBinding1;
-        {_, _, _, [], [], [], [], nil, nil, nil, nil} -> erlang:append_element(NewBinding1, {GOT, GOF, StopOperators});
-        _ -> erlang:append_element(NewBinding1, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, VHost, DATRE, DAFRE, DDTRE, DDFRE})
+    NewBinding2 = case {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE} of
+        {0, 0, {0, 0}, [], [], [], [], nil, nil, nil, nil, nil, nil, nil, nil} -> NewBinding1;
+        {_, _, _, [], [], [], [], nil, nil, nil, nil, nil, nil, nil, nil} -> erlang:append_element(NewBinding1, {GOT, GOF, StopOperators});
+        _ -> erlang:append_element(NewBinding1, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, VHost, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE})
     end,
     NewBinding = erlang:append_element(NewBinding2, BindingId),
     NewBindings = lists:keysort(1, [NewBinding | CurrentOrderedBindings]),
