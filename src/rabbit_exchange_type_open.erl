@@ -81,54 +81,59 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, {GOT, G
     end;
 get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, nil, nil, nil, nil, nil, nil, nil, nil}, _} | T ], _, ResDests) ->
     case {is_match(BindingType, MatchRk, RK, Args, Headers), StopOperators} of
-        {true,{1,_}}  -> ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT));
-        {false,{_,1}} -> ordsets:union(DAF, ordsets:subtract(ResDests, DDF));
-        {true,_}      -> get_routes(Data, T, GOT, ordsets:union(DAT, ordsets:subtract(ordsets:add_element(Dest, ResDests), DDT)));
-        {false,_}     -> get_routes(Data, T, GOF, ordsets:union(DAF, ordsets:subtract(ResDests, DDF)))
+        {true,{1,_}}  -> ordsets:subtract(ordsets:union(DAT, ordsets:add_element(Dest, ResDests)), DDT);
+        {false,{_,1}} -> ordsets:subtract(ordsets:union(DAF, ResDests), DDF);
+        {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:union(DAT, ordsets:add_element(Dest, ResDests)), DDT));
+        {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union(DAF, ResDests), DDF))
     end;
 get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, VHost, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE}, _} | T ], _, ResDests) ->
 % May I use ets:tab2list here ?..... I don't know.
 % And yes, maybe there is a cleaner way to list queues :)
+%
+%
+% WE MUST DO THAT ONCE PER MESSAGE..
+%
+%
     AllQueues = mnesia:dirty_all_keys(rabbit_queue),
 % We should drop amq.* queues also no ?! I don't see them here..
     AllVHQueues = [Q || Q = #resource{virtual_host = QueueVHost, kind = queue} <- AllQueues, QueueVHost == VHost],
     DATREsult = case DATRE of
-        nil -> [];
-        _ -> [Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DATRE, [ {capture, none} ]) == match]
+        nil -> ordsets:from_list([]);
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DATRE, [ {capture, none} ]) == match])
     end,
     DAFREsult = case DAFRE of
-        nil -> [];
-        _ -> [Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DAFRE, [ {capture, none} ]) == match]
+        nil -> ordsets:from_list([]);
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DAFRE, [ {capture, none} ]) == match])
     end,
     DDTREsult = case DDTRE of
-        nil -> [];
-        _ -> [Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDTRE, [ {capture, none} ]) == match]
+        nil -> ordsets:from_list([]);
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDTRE, [ {capture, none} ]) == match])
     end,
     DDFREsult = case DDFRE of
-        nil -> [];
-        _ -> [Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDFRE, [ {capture, none} ]) == match]
+        nil -> ordsets:from_list([]);
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDFRE, [ {capture, none} ]) == match])
     end,
     DATNREsult = case DATNRE of
-        nil -> [];
-        _ -> [Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DATNRE, [ {capture, none} ]) /= match]
+        nil -> ordsets:from_list([]);
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DATNRE, [ {capture, none} ]) /= match])
     end,
     DAFNREsult = case DAFNRE of
-        nil -> [];
-        _ -> [Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DAFNRE, [ {capture, none} ]) /= match]
+        nil -> ordsets:from_list([]);
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DAFNRE, [ {capture, none} ]) /= match])
     end,
     DDTNREsult = case DDTNRE of
-        nil -> [];
-        _ -> [Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDTNRE, [ {capture, none} ]) /= match]
+        nil -> ordsets:from_list([]);
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDTNRE, [ {capture, none} ]) /= match])
     end,
     DDFNREsult = case DDFNRE of
-        nil -> [];
-        _ -> [Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDFNRE, [ {capture, none} ]) /= match]
+        nil -> ordsets:from_list([]);
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDFNRE, [ {capture, none} ]) /= match])
     end,
     case {is_match(BindingType, MatchRk, RK, Args, Headers), StopOperators} of
-        {true,{1,_}}  -> ordsets:union(ordsets:union([DAT,DATREsult,DATNREsult]), ordsets:subtract(ordsets:add_element(Dest, ResDests), ordsets:union([DDT,DDTREsult,DDTNREsult])));
-        {false,{_,1}} -> ordsets:union(ordsets:union([DAF,DAFREsult,DAFNREsult]), ordsets:subtract(ResDests, ordsets:union([DDF,DDFREsult,DDFNREsult])));
-        {true,_}      -> get_routes(Data, T, GOT, ordsets:union(ordsets:union([DAT,DATREsult,DATNREsult]), ordsets:subtract(ordsets:add_element(Dest, ResDests), ordsets:union([DDT,DDTREsult,DDTNREsult]))));
-        {false,_}     -> get_routes(Data, T, GOF, ordsets:union(ordsets:union([DAF,DAFREsult,DAFNREsult]), ordsets:subtract(ResDests, ordsets:union([DDF,DDFREsult,DDFNREsult]))))
+        {true,{1,_}}  -> ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult]));
+        {false,{_,1}} -> ordsets:subtract(ordsets:union([DAF,DAFREsult,DAFNREsult,ResDests]), ordsets:union([DDF,DDFREsult,DDFNREsult]));
+        {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult])));
+        {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union([DAF,DAFREsult,DAFNREsult,ResDests]), ordsets:union([DDF,DDFREsult,DDFNREsult])))
     end.
 
 
@@ -677,6 +682,7 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
 add_binding(_, _, _) ->
     ok.
 
+% mnesia table open_bindings doe not HAVE TO BE ordset?..
 
 remove_bindings(transaction, #exchange{name = XName}, BindingsToDelete) ->
     CurrentOrderedBindings = case mnesia:read(rabbit_open_bindings, XName, write) of
