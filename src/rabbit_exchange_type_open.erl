@@ -195,14 +195,18 @@ validate_list_type_usage(all, [ {<<"x-?hkv= ", _/binary>>, array, _} | _ ], _) -
     {error, {binding_invalid, "Invalid use of list type with = operator with binding type 'all'", []}};
 validate_list_type_usage(any, [ {<<"x-?hkv!= ", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with != operator with binding type 'any'", []}};
-% Routing facilities check
+% Routing facilities
+validate_list_type_usage(_, [ {<< RuleKey:9/binary, _/binary >>, array, _} | Tail ], _) when RuleKey==<<"x-addqre-">> ; RuleKey==<<"x-delqre-">> ->
+    {error, {binding_invalid, "Invalid use of list type with regex in routing facilities", []}};
+validate_list_type_usage(_, [ {<< RuleKey:10/binary, _/binary >>, array, _} | Tail ], _) when RuleKey==<<"x-addq!re-">> ; RuleKey==<<"x-delq!re-">> ->
+    {error, {binding_invalid, "Invalid use of list type with regex in routing facilities", []}};
 
 validate_list_type_usage(BindingType, [ {<< RuleKey/binary >>, array, _} | Tail ], Args) ->
     RKL = binary_to_list(RuleKey),
     MatchOperators = ["x-?hkv<", "x-?hkv>", "x-?dture", "x-?dtunre", "x-?dtlre", "x-?dtlnre"],
     case lists:filter(fun(S) -> lists:prefix(S, RKL) end, MatchOperators) of
         [] -> validate_list_type_usage(BindingType, Tail, Args);
-        _ -> {error, {binding_invalid, "Invalid use of list type with < or > operators ad datetime related", []}}
+        _ -> {error, {binding_invalid, "Invalid use of list type with < or > operators and datetime related", []}}
     end;
 % Else go next
 validate_list_type_usage(BindingType, [ _ | Tail ], Args) ->
@@ -266,8 +270,6 @@ validate_operators2([ {<<"x-dele-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | 
 % Dests ops (queues)
 validate_operators2([ {<<"x-addq-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-addqre-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-addqre-ontrue", _/binary>>, _, _} | _ ]) ->
-    {error, {binding_invalid, "Invalid x-addqre-ontrue operator", []}};
 validate_operators2([ {<<"x-addq!re-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-addq-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-addqre-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
