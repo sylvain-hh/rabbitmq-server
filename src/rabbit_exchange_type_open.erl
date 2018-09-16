@@ -44,6 +44,22 @@ description() ->
 
 serialise_events() -> false.
 
+save_datetimes() ->
+    TS = erlang:timestamp(),
+% Local date time
+    {YMD={Y,Mo,D},{H,Mi,S}} = calendar:now_to_local_time(TS),
+    {_,W} = calendar:iso_week_number(YMD),
+    Dw = calendar:day_of_the_week(YMD),
+    DateAsString = lists:flatten(io_lib:format("~4..0w~2..0w~2..0w ~2..0w ~w ~2..0w~2..0w~2..0w", [Y,Mo, D, W, Dw, H, Mi, S])),
+    put(dt_l, DateAsString),
+% Universal date time taken from before
+    {UYMD={UY,UMo,UD},{UH,UMi,US}} = calendar:now_to_universal_time(TS),
+    {_,UW} = calendar:iso_week_number(UYMD),
+    UDw = calendar:day_of_the_week(UYMD),
+    UDateAsString = lists:flatten(io_lib:format("~4..0w~2..0w~2..0w ~2..0w ~w ~2..0w~2..0w~2..0w", [UY,UMo, UD, UW, UDw, UH, UMi, US])),
+    put(dt_u, UDateAsString).
+
+
 route(#exchange{name = Name},
       #delivery{message = #basic_message{content = Content, routing_keys = [RK | _]}}) ->
     Headers = case (Content#content.properties)#'P_basic'.headers of
@@ -52,41 +68,43 @@ route(#exchange{name = Name},
               end,
     CurrentOrderedBindings = case ets:lookup(rabbit_open_bindings, Name) of
         [] -> [];
-        [#open_bindings{bindings = Bs}] -> Bs
+        [#open_bindings{bindings = Bs}] ->
+            save_datetimes(),
+            Bs
     end,
     get_routes({RK, Headers}, CurrentOrderedBindings, 0, ordsets:new()).
 
 
-is_match(BindingType, MatchRk, RK, Args, Headers) ->
+is_match(BindingType, MatchRk, RK, Args, Headers, MatchDt) ->
     case BindingType of
-        all -> is_match_rk(BindingType, MatchRk, RK) andalso is_match_hkv(BindingType, Args, Headers);
-        any -> is_match_rk(BindingType, MatchRk, RK) orelse is_match_hkv(BindingType, Args, Headers)
+        all -> is_match_dt(BindingType, MatchDt) andalso is_match_rk(BindingType, MatchRk, RK) andalso is_match_hkv(BindingType, Args, Headers);
+        any -> is_match_rk(BindingType, MatchRk, RK) orelse is_match_hkv(BindingType, Args, Headers) orelse is_match_dt(BindingType, MatchDt)
     end.
 
 get_routes(_, [], _, ResDests) -> ordsets:to_list(ResDests);
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, _} | T ], _, ResDests) ->
-    case is_match(BindingType, MatchRk, RK, Args, Headers) of
+get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, _} | T ], _, ResDests) ->
+    case is_match(BindingType, MatchRk, RK, Args, Headers, MatchDt) of
         true -> get_routes(Data, T, 0, ordsets:add_element(Dest, ResDests));
            _ -> get_routes(Data, T, 0, ResDests)
     end;
 % Jump to the next binding satisfying the last goto operator
 get_routes(Data, [ {Order, _, _, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
     get_routes(Data, T, GotoOrder, ResDests);
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, {GOT, GOF, StopOperators}, _} | T ], _, ResDests) ->
-    case {is_match(BindingType, MatchRk, RK, Args, Headers), StopOperators} of
+get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, {GOT, GOF, StopOperators}, _} | T ], _, ResDests) ->
+    case {is_match(BindingType, MatchRk, RK, Args, Headers, MatchDt), StopOperators} of
         {true,{1,_}}  -> ordsets:add_element(Dest, ResDests);
         {false,{_,1}} -> ResDests;
         {true,_}      -> get_routes(Data, T, GOT, ordsets:add_element(Dest, ResDests));
         {false,_}     -> get_routes(Data, T, GOF, ResDests)
     end;
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, nil, nil, nil, nil, nil, nil, nil, nil}, _} | T ], _, ResDests) ->
-    case {is_match(BindingType, MatchRk, RK, Args, Headers), StopOperators} of
+get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, nil, nil, nil, nil, nil, nil, nil, nil}, _} | T ], _, ResDests) ->
+    case {is_match(BindingType, MatchRk, RK, Args, Headers, MatchDt), StopOperators} of
         {true,{1,_}}  -> ordsets:subtract(ordsets:union(DAT, ordsets:add_element(Dest, ResDests)), DDT);
         {false,{_,1}} -> ordsets:subtract(ordsets:union(DAF, ResDests), DDF);
         {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:union(DAT, ordsets:add_element(Dest, ResDests)), DDT));
         {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union(DAF, ResDests), DDF))
     end;
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, VHost, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE}, _} | T ], _, ResDests) ->
+get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, VHost, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE}, _} | T ], _, ResDests) ->
 % May I use ets:tab2list here ?..... I don't know.
 % And yes, maybe there is a cleaner way to list queues :)
 %
@@ -129,7 +147,7 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk}, {GOT, G
         nil -> ordsets:from_list([]);
         _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDFNRE, [ {capture, none} ]) /= match])
     end,
-    case {is_match(BindingType, MatchRk, RK, Args, Headers), StopOperators} of
+    case {is_match(BindingType, MatchRk, RK, Args, Headers, MatchDt), StopOperators} of
         {true,{1,_}}  -> ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult]));
         {false,{_,1}} -> ordsets:subtract(ordsets:union([DAF,DAFREsult,DAFNREsult,ResDests]), ordsets:union([DDF,DDFREsult,DDFNREsult]));
         {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult])));
@@ -172,17 +190,17 @@ validate_list_type_usage(all, [ {<<"x-?rk=", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with routing key = operator with binding type 'all'", []}};
 validate_list_type_usage(any, [ {<<"x-?rk!=", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with routing key != operator with binding type 'any'", []}};
- 
+
 validate_list_type_usage(all, [ {<<"x-?hkv= ", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with = operator with binding type 'all'", []}};
 validate_list_type_usage(any, [ {<<"x-?hkv!= ", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with != operator with binding type 'any'", []}};
 validate_list_type_usage(BindingType, [ {<< RuleKey/binary >>, array, _} | Tail ], Args) ->
     RKL = binary_to_list(RuleKey),
-    MatchOperators = ["x-?hkv<", "x-?hkv>"],
+    MatchOperators = ["x-?hkv<", "x-?hkv>", "x-?dture", "x-?dtunre", "x-?dtlre", "x-?dtlnre"],
     case lists:filter(fun(S) -> lists:prefix(S, RKL) end, MatchOperators) of
         [] -> validate_list_type_usage(BindingType, Tail, Args);
-        _ -> {error, {binding_invalid, "Invalid use of list type with < or > operators", []}}
+        _ -> {error, {binding_invalid, "Invalid use of list type with < or > operators ad datetime related", []}}
     end;
 % Else go next
 validate_list_type_usage(BindingType, [ _ | Tail ], Args) ->
@@ -222,6 +240,12 @@ validate_operators2([ {_, decimal, _} | _ ]) ->
 % Do not think that can't happen... it can ! :)
 validate_operators2([ {<<>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Binding's rule key can't be void", []}};
+
+% Datettime match ops
+validate_operators2([ {<<"x-?dture">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?dtunre">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?dtlre">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?dtlnre">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 
 % Routing key ops
 validate_operators2([ {<<"x-?rk=">>, longstr, <<_/binary>>} | Tail ]) -> validate_operators2(Tail);
@@ -307,6 +331,63 @@ validate_regexes([ _ | Tail ]) ->
 parse_x_match({longstr, <<"all">>}) -> all;
 parse_x_match({longstr, <<"any">>}) -> any;
 parse_x_match(_)                    -> all.
+
+
+%
+% Check datetime operators
+%
+
+is_match_dt(all, Rules) ->
+    is_match_dt_all(Rules);
+is_match_dt(any, Rules) ->
+    is_match_dt_any(Rules).
+
+% With 'all' binding type
+% No (more) match to chek, return true
+is_match_dt_all([]) -> true;
+is_match_dt_all([ {dture, V} | Tail]) ->
+    case re:run(get(dt_u), V, [ {capture, none} ]) of
+        match -> is_match_dt_all(Tail);
+        _ -> false
+    end;
+is_match_dt_all([ {dtunre, V} | Tail]) ->
+    case re:run(get(dt_u), V, [ {capture, none} ]) of
+        match -> false;
+        _ -> is_match_dt_all(Tail)
+    end;
+is_match_dt_all([ {dtlre, V} | Tail]) ->
+    case re:run(get(dt_l), V, [ {capture, none} ]) of
+        match -> is_match_dt_all(Tail);
+        _ -> false
+    end;
+is_match_dt_all([ {dtlnre, V} | Tail]) ->
+    case re:run(get(dt_l), V, [ {capture, none} ]) of
+        match -> false;
+        _ -> is_match_dt_all(Tail)
+    end.
+% With 'any' binding type
+is_match_dt_any([]) -> false;
+is_match_dt_any([ {dture, V} | Tail]) ->
+    case re:run(get(dt_u), V, [ {capture, none} ]) of
+        match -> true;
+        _ -> is_match_dt_any(Tail)
+    end;
+is_match_dt_any([ {dtunre, V} | Tail]) ->
+    case re:run(get(dt_u), V, [ {capture, none} ]) of
+        match -> is_match_dt_any(Tail);
+        _ -> true
+    end;
+is_match_dt_any([ {dtlre, V} | Tail]) ->
+    case re:run(get(dt_l), V, [ {capture, none} ]) of
+        match -> true;
+        _ -> is_match_dt_any(Tail)
+    end;
+is_match_dt_any([ {dtlnre, V} | Tail]) ->
+    case re:run(get(dt_l), V, [ {capture, none} ]) of
+        match -> is_match_dt_any(Tail);
+        _ -> true
+    end.
+
 
 
 %
@@ -569,6 +650,19 @@ get_binding_order(Args, Default) ->
         {_, Order} -> Order
     end.
 
+% Datetime match ops
+get_match_dt_ops([], Result) -> Result;
+get_match_dt_ops([{<<"x-?dture">>, _, <<V/binary>>} | T], Res) ->
+    get_match_dt_ops(T, [{dture, V} | Res]);
+get_match_dt_ops([{<<"x-?dtunre">>, _, <<V/binary>>} | T], Res) ->
+    get_match_dt_ops(T, [{dtunre, V} | Res]);
+get_match_dt_ops([{<<"x-?dtlre">>, _, <<V/binary>>} | T], Res) ->
+    get_match_dt_ops(T, [{dtlre, V} | Res]);
+get_match_dt_ops([{<<"x-?dtlnre">>, _, <<V/binary>>} | T], Res) ->
+    get_match_dt_ops(T, [{dtlnre, V} | Res]);
+get_match_dt_ops([_ | T], R) ->
+    get_match_dt_ops(T, R).
+
 % Validation is made upstream
 get_stop_operators([], Result) -> Result;
 get_stop_operators([{<<"x-stop-ontrue">>, _, _} | T], {_, StopOnFalse}) ->
@@ -677,7 +771,8 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     FlattenedBindindArgs = flatten_binding_args(rebuild_args(BindingArgs, Dest)),
     MatchHKOps = get_match_hk_ops(FlattenedBindindArgs),
     MatchRKOps = get_match_rk_ops(FlattenedBindindArgs, []),
-    MatchOps = {MatchHKOps, MatchRKOps},
+    MatchDTOps = get_match_dt_ops(FlattenedBindindArgs, []),
+    MatchOps = {MatchHKOps, MatchRKOps, MatchDTOps},
     {{DAT, DAF, DDT, DDF}, {DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE}} = get_dests_operators(VHost, FlattenedBindindArgs),
     CurrentOrderedBindings = case mnesia:read(rabbit_open_bindings, XName, write) of
         [] -> [];
