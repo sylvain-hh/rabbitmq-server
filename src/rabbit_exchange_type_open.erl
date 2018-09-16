@@ -59,8 +59,16 @@ save_datetimes() ->
     UDateAsString = lists:flatten(io_lib:format("~4..0w~2..0w~2..0w ~2..0w ~w ~2..0w~2..0w~2..0w", [UY,UMo, UD, UW, UDw, UH, UMi, US])),
     put(dt_u, UDateAsString).
 
+% Maybe we could use ets:tab2list here ?..... I don't know.
+% And yes, maybe there is a cleaner way to list queues..
+save_queues(VHost) ->
+    AllQueues = mnesia:dirty_all_keys(rabbit_queue),
+% We should drop amq.* queues also no ?! I don't see them here..
+    AllVHQueues = [Q || Q = #resource{virtual_host = QueueVHost, kind = queue} <- AllQueues, QueueVHost == VHost],
+    put(allqueues, AllVHQueues).
 
-route(#exchange{name = Name},
+
+route(#exchange{name = #resource{virtual_host = VHost} = Name},
       #delivery{message = #basic_message{content = Content, routing_keys = [RK | _]}}) ->
     Headers = case (Content#content.properties)#'P_basic'.headers of
                   undefined -> [];
@@ -70,6 +78,7 @@ route(#exchange{name = Name},
         [] -> [];
         [#open_bindings{bindings = Bs}] ->
             save_datetimes(),
+            save_queues(VHost),
             Bs
     end,
     get_routes({RK, Headers}, CurrentOrderedBindings, 0, ordsets:new()).
@@ -104,17 +113,8 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}
         {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:union(DAT, ordsets:add_element(Dest, ResDests)), DDT));
         {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union(DAF, ResDests), DDF))
     end;
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, VHost, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE}, _} | T ], _, ResDests) ->
-% May I use ets:tab2list here ?..... I don't know.
-% And yes, maybe there is a cleaner way to list queues :)
-%
-%
-% WE MUST DO THAT ONCE PER MESSAGE..
-%
-%
-    AllQueues = mnesia:dirty_all_keys(rabbit_queue),
-% We should drop amq.* queues also no ?! I don't see them here..
-    AllVHQueues = [Q || Q = #resource{virtual_host = QueueVHost, kind = queue} <- AllQueues, QueueVHost == VHost],
+get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE}, _} | T ], _, ResDests) ->
+    AllVHQueues = get(allqueues),
     DATREsult = case DATRE of
         nil -> ordsets:from_list([]);
         _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DATRE, [ {capture, none} ]) == match])
@@ -195,6 +195,8 @@ validate_list_type_usage(all, [ {<<"x-?hkv= ", _/binary>>, array, _} | _ ], _) -
     {error, {binding_invalid, "Invalid use of list type with = operator with binding type 'all'", []}};
 validate_list_type_usage(any, [ {<<"x-?hkv!= ", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with != operator with binding type 'any'", []}};
+% Routing facilities check
+
 validate_list_type_usage(BindingType, [ {<< RuleKey/binary >>, array, _} | Tail ], Args) ->
     RKL = binary_to_list(RuleKey),
     MatchOperators = ["x-?hkv<", "x-?hkv>", "x-?dture", "x-?dtunre", "x-?dtlre", "x-?dtlnre"],
@@ -264,6 +266,8 @@ validate_operators2([ {<<"x-dele-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | 
 % Dests ops (queues)
 validate_operators2([ {<<"x-addq-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-addqre-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-addqre-ontrue", _/binary>>, _, _} | _ ]) ->
+    {error, {binding_invalid, "Invalid x-addqre-ontrue operator", []}};
 validate_operators2([ {<<"x-addq!re-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-addq-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-addqre-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
@@ -782,7 +786,7 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     NewBinding2 = case {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE} of
         {0, 0, {0, 0}, [], [], [], [], nil, nil, nil, nil, nil, nil, nil, nil} -> NewBinding1;
         {_, _, _, [], [], [], [], nil, nil, nil, nil, nil, nil, nil, nil} -> erlang:append_element(NewBinding1, {GOT, GOF, StopOperators});
-        _ -> erlang:append_element(NewBinding1, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, VHost, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE})
+        _ -> erlang:append_element(NewBinding1, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE})
     end,
     NewBinding = erlang:append_element(NewBinding2, BindingId),
     NewBindings = lists:keysort(1, [NewBinding | CurrentOrderedBindings]),
