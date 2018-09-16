@@ -143,10 +143,11 @@ is_match_hkv(any, Args, Headers) ->
     is_match_hkv_any(Args, Headers).
 
 
-validate_binding(_X, #binding{args = Args, key = << >>}) ->
-    case rabbit_misc:table_lookup(Args, <<"x-match">>) of
-        {longstr, <<"all">>} -> validate_list_type_usage(all, Args);
-        {longstr, <<"any">>} -> validate_list_type_usage(any, Args);
+validate_binding(_X, #binding{args = Args, key = << >>, destination = Dest}) ->
+    Args2 = rebuild_args(Args, Dest),
+    case rabbit_misc:table_lookup(Args2, <<"x-match">>) of
+        {longstr, <<"all">>} -> validate_list_type_usage(all, Args2);
+        {longstr, <<"any">>} -> validate_list_type_usage(any, Args2);
         {longstr, Other}     -> {error,
                                  {binding_invalid,
                                   "Invalid x-match field value ~p; "
@@ -155,7 +156,7 @@ validate_binding(_X, #binding{args = Args, key = << >>}) ->
                                  {binding_invalid,
                                   "Invalid x-match field type ~p (value ~p); "
                                   "expected longstr", [Type, Other]}};
-        undefined            -> validate_list_type_usage(all, Args)
+        undefined            -> validate_list_type_usage(all, Args2)
     end;
 validate_binding(_X, _) ->
     {error, {binding_invalid, "Invalid routing key declaration in x-open exchange", []}}.
@@ -183,6 +184,7 @@ validate_list_type_usage(BindingType, [ {<< RuleKey/binary >>, array, _} | Tail 
         [] -> validate_list_type_usage(BindingType, Tail, Args);
         _ -> {error, {binding_invalid, "Invalid use of list type with < or > operators", []}}
     end;
+% Else go next
 validate_list_type_usage(BindingType, [ _ | Tail ], Args) ->
     validate_list_type_usage(BindingType, Tail, Args).
 
@@ -212,9 +214,11 @@ validate_operators(Args) ->
   end.
 
 validate_operators2([]) -> ok;
+% x-match have been checked first, so that we don't check type or value
+validate_operators2([ {<<"x-match">>, _, _} | Tail ]) -> validate_operators2(Tail);
+% Decimal type is a pain to compare with other numeric types's values, so this is forbidden.
 validate_operators2([ {_, decimal, _} | _ ]) ->
     {error, {binding_invalid, "Decimal type is invalid in x-open", []}};
-validate_operators2([ {<<"x-match">>, longstr, _} | Tail ]) -> validate_operators2(Tail);
 % Do not think that can't happen... it can ! :)
 validate_operators2([ {<<>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Binding's rule key can't be void", []}};
@@ -488,10 +492,20 @@ is_match_hkv_any([_ | BNext], HCur) ->
     is_match_hkv_any(BNext, HCur).
 
 
+% This fun transforms some rule by some other
+rebuild_args(Args, Dest) -> rebuild_args(Args, [], Dest).
+
+rebuild_args([], Ret, _) -> Ret;
+rebuild_args([ {<<"x-delq-main">>, longstr, <<>>} | Tail ], Ret, Dest = #resource{kind = queue, name = RName} ) ->
+    rebuild_args(Tail, [ {<<"x-delq-ontrue">>, longstr, RName} | Ret], Dest);
+rebuild_args([ Op | Tail ], Ret, Dest) ->
+    rebuild_args(Tail, [ Op | Ret], Dest).
+
+
+
 get_match_hk_ops(BindingArgs) ->
     MatchOperators = get_match_hk_ops(BindingArgs, []),
     rabbit_misc:sort_field_table(MatchOperators).
-
 
 % Get match operators
 % We won't check types again as this has been done during validation..
@@ -660,7 +674,7 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     BindingOrder = get_binding_order(BindingArgs, 200),
     {GOT, GOF} = get_goto_operators(BindingArgs, {0, 0}),
     StopOperators = get_stop_operators(BindingArgs, {0, 0}),
-    FlattenedBindindArgs = flatten_binding_args(BindingArgs),
+    FlattenedBindindArgs = flatten_binding_args(rebuild_args(BindingArgs, Dest)),
     MatchHKOps = get_match_hk_ops(FlattenedBindindArgs),
     MatchRKOps = get_match_rk_ops(FlattenedBindindArgs, []),
     MatchOps = {MatchHKOps, MatchRKOps},
