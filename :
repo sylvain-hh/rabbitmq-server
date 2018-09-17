@@ -46,7 +46,6 @@ serialise_events() -> false.
 
 %
 % This one is really heavy..... We must found something neater
-% The NIF way seems to be ok for that..
 %
 save_datetimes() ->
     TS = erlang:timestamp(),
