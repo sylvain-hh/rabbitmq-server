@@ -148,53 +148,87 @@ is_match(BindingType, MatchRk, RK, Args, Headers, MatchDt) ->
         any -> is_match_rk(BindingType, MatchRk, RK) orelse is_match_hkv(BindingType, Args, Headers) orelse is_match_dt(BindingType, MatchDt)
     end.
 
+
+% No more bindings; return dests
 get_routes(_, [], _, ResDests) -> ordsets:to_list(ResDests);
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, _} | T ], _, ResDests) ->
+get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, << 0 >>, _} | T ], _, ResDests) ->
     case is_match(BindingType, MatchRk, RK, Args, Headers, MatchDt) of
         true -> get_routes(Data, T, 0, ordsets:add_element(Dest, ResDests));
            _ -> get_routes(Data, T, 0, ResDests)
     end;
+% Simplest like direct's exchange type
+get_routes(Data={RK, Headers}, [ {_, BindingType, _, {Args, MatchRk, MatchDt}, << 128 >>, _} | T ], _, ResDests) ->
+    case is_match(BindingType, MatchRk, RK, Args, Headers, MatchDt) of
+        true -> get_routes(Data, T, 0, ordsets:add_element(rabbit_misc:r(get(xopen_vhost), queue, RK), ResDests));
+           _ -> get_routes(Data, T, 0, ResDests)
+    end;
 % Jump to the next binding satisfying the last goto operator
-get_routes(Data, [ {Order, _, _, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
+get_routes(Data, [ {Order, _, _, _, _, _, _} | T ], GotoOrder, ResDests) when GotoOrder > Order ->
     get_routes(Data, T, GotoOrder, ResDests);
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, {GOT, GOF, StopOperators}, _} | T ], _, ResDests) ->
+% At this point, main dest is rewritten for next cases
+get_routes(Data = {RK, _}, [ {Order, BindingType, _, MatchOps, << 128 >>, Other, BindingId} | T ], GotoOrder, ResDests) ->
+    NewDest = rabbit_misc:r(get(xopen_vhost), queue, RK),
+    get_routes(Data, [{Order, BindingType, NewDest, MatchOps, << 0 >>, Other, BindingId} | T], GotoOrder, ResDests);
+get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, _, {GOT, GOF, StopOperators}, _} | T ], _, ResDests) ->
     case {is_match(BindingType, MatchRk, RK, Args, Headers, MatchDt), StopOperators} of
         {true,{1,_}}  -> ordsets:add_element(Dest, ResDests);
         {false,{_,1}} -> ResDests;
         {true,_}      -> get_routes(Data, T, GOT, ordsets:add_element(Dest, ResDests));
         {false,_}     -> get_routes(Data, T, GOF, ResDests)
     end;
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, nil, nil, nil, nil, nil, nil, nil, nil, <<0, 0>>}, _} | T ], _, ResDests) ->
+get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, _, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, nil, nil, nil, nil, nil, nil, nil, nil, <<0, 0>>}, _} | T ], _, ResDests) ->
     case {is_match(BindingType, MatchRk, RK, Args, Headers, MatchDt), StopOperators} of
         {true,{1,_}}  -> ordsets:subtract(ordsets:union(DAT, ordsets:add_element(Dest, ResDests)), DDT);
         {false,{_,1}} -> ordsets:subtract(ordsets:union(DAF, ResDests), DDF);
         {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:union(DAT, ordsets:add_element(Dest, ResDests)), DDT));
         {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union(DAF, ResDests), DDF))
     end;
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, nil, nil, nil, nil, nil, nil, nil, nil, <<BindDest:8, 0>>}, _} | T ], _, ResDests) ->
+get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, _, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, nil, nil, nil, nil, nil, nil, nil, nil, <<BindDest:8, 0>>}, _} | T ], _, ResDests) ->
     {MsgDQAT, MsgDEAT, _, _} = case get(xopen_msg_ds) of
         undefined -> save_msg_dops(Headers, get(xopen_vhost));
         V -> V
     end,
-    MsgDQAT = case (BindDest bsr 7) band 1 of
+    MsgDQAT2 = case (BindDest bsr 7) band 1 of
         1 -> MsgDQAT;
         0 -> ordsets:from_list([])
     end,
-    MsgDEAT = case (BindDest bsr 5) band 1 of
+    MsgDEAT2 = case (BindDest bsr 5) band 1 of
         1 -> MsgDEAT;
         0 -> ordsets:from_list([])
     end,
     case {is_match(BindingType, MatchRk, RK, Args, Headers, MatchDt), StopOperators} of
-        {true,{1,_}}  -> ordsets:subtract(ordsets:union([DAT, MsgDQAT, MsgDEAT, ordsets:add_element(Dest, ResDests)]), DDT);
+        {true,{1,_}}  -> ordsets:subtract(ordsets:union([DAT, MsgDQAT2, MsgDEAT2, ordsets:add_element(Dest, ResDests)]), DDT);
         {false,{_,1}} -> ordsets:subtract(ordsets:union([DAF, ResDests]), DDF);
-        {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:union([DAT, MsgDQAT, MsgDEAT, ordsets:add_element(Dest, ResDests)]), DDT));
+        {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:union([DAT, MsgDQAT2, MsgDEAT2, ordsets:add_element(Dest, ResDests)]), DDT));
         {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union([DAF, ResDests]), DDF))
     end;
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE, <<0, 0>>}, _} | T ], _, ResDests) ->
+get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, _, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE, <<BindDest:8, BindREDest:8>>}, _} | T ], _, ResDests) ->
     AllVHQueues = case get(xopen_allqs) of
         undefined -> save_queues();
-        V -> V
+        Res1 -> Res1
     end,
+    {MsgDQAT, MsgDEAT, MsgDQREAT, MsgDQNREAT} = case get(xopen_msg_ds) of
+        undefined -> save_msg_dops(Headers, get(xopen_vhost));
+        Res2 -> Res2
+    end,
+    MsgDQAT2 = case (BindDest bsr 7) band 1 of
+        1 -> MsgDQAT;
+        0 -> ordsets:from_list([])
+    end,
+    MsgDEAT2 = case (BindDest bsr 5) band 1 of
+        1 -> MsgDEAT;
+        0 -> ordsets:from_list([])
+    end,
+
+    MsgDQREAT2 = case ((BindREDest bsr 7) band 1 == 1 andalso MsgDQREAT /= nil) of
+        false -> ordsets:from_list([]);
+        true -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, MsgDQREAT, [ report_errors, {capture, none} ]) == match])
+    end,
+    MsgDQNREAT2 = case ((BindREDest bsr 6) band 1 == 1 andalso MsgDQNREAT /= nil) of
+        false -> ordsets:from_list([]);
+        true -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, MsgDQNREAT, [ report_errors, {capture, none} ]) /= match])
+    end,
+
     DATREsult = case DATRE of
         nil -> ordsets:from_list([]);
         _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DATRE, [ {capture, none} ]) == match])
@@ -205,11 +239,11 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}
     end,
     DDTREsult = case DDTRE of
         nil -> ordsets:from_list([]);
-        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDTRE, [ {capture, none} ]) == match])
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName, kind=queue} <- ResDests, re:run(QueueName, DDTRE, [ {capture, none} ]) == match])
     end,
     DDFREsult = case DDFRE of
         nil -> ordsets:from_list([]);
-        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDFRE, [ {capture, none} ]) == match])
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName, kind=queue} <- ResDests, re:run(QueueName, DDFRE, [ {capture, none} ]) == match])
     end,
     DATNREsult = case DATNRE of
         nil -> ordsets:from_list([]);
@@ -221,16 +255,16 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}
     end,
     DDTNREsult = case DDTNRE of
         nil -> ordsets:from_list([]);
-        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDTNRE, [ {capture, none} ]) /= match])
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName, kind=queue} <- ResDests, re:run(QueueName, DDTNRE, [ {capture, none} ]) /= match])
     end,
     DDFNREsult = case DDFNRE of
         nil -> ordsets:from_list([]);
-        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DDFNRE, [ {capture, none} ]) /= match])
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName, kind=queue} <- ResDests, re:run(QueueName, DDFNRE, [ {capture, none} ]) /= match])
     end,
     case {is_match(BindingType, MatchRk, RK, Args, Headers, MatchDt), StopOperators} of
-        {true,{1,_}}  -> ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult]));
+        {true,{1,_}}  -> ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,MsgDQAT2,MsgDEAT2,MsgDQREAT2,MsgDQNREAT2,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult]));
         {false,{_,1}} -> ordsets:subtract(ordsets:union([DAF,DAFREsult,DAFNREsult,ResDests]), ordsets:union([DDF,DDFREsult,DDFNREsult]));
-        {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult])));
+        {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,MsgDQAT2,MsgDEAT2,MsgDQREAT2,MsgDQNREAT2,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult])));
         {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union([DAF,DAFREsult,DAFNREsult,ResDests]), ordsets:union([DDF,DDFREsult,DDFNREsult])))
     end.
 
@@ -365,6 +399,8 @@ validate_operators2([ {<<"x-msg-addq-ontrue">>, longstr, <<>>} | Tail ]) -> vali
 validate_operators2([ {<<"x-msg-addqre-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-msg-addq!re-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-msg-adde-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+
+validate_operators2([ {<<"x-msg-destq-rk">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
 
 % Binding order is numeric only
 validate_operators2([ {<<"x-order">>, _, V} | Tail ]) when is_integer(V) -> validate_operators2(Tail);
@@ -664,12 +700,42 @@ is_match_hkv_any([_ | BNext], HCur) ->
     is_match_hkv_any(BNext, HCur).
 
 
+topic_amqp_to_re(TopicStr) -> topic_amqp_to_re([ $^ | erlang:binary_to_list(TopicStr)], 0).
+topic_amqp_to_reci(TopicStr) -> topic_amqp_to_re([ "^(?i)" | erlang:binary_to_list(TopicStr)], 0).
+topic_amqp_to_re(TopicStr, 0) ->
+    NewTopicStr = string:replace(TopicStr, "*", "(\\w+)", all),
+    topic_amqp_to_re(NewTopicStr, 1);
+topic_amqp_to_re(TopicStr, 1) ->
+    NewTopicStr = string:replace(TopicStr, "#.", "(\\w+.)*"),
+    topic_amqp_to_re(NewTopicStr, 2);
+topic_amqp_to_re(TopicStr, 2) ->
+    NewTopicStr = string:replace(TopicStr, ".#", "(.\\w+)*"),
+    topic_amqp_to_re(NewTopicStr, 3);
+topic_amqp_to_re(TopicStr, 3) ->
+    NewTopicStr = string:replace(TopicStr, ".", "\\.", all),
+    topic_amqp_to_re(NewTopicStr, 4);
+topic_amqp_to_re(TopicStr, 4) ->
+    NewTopicStr = string:replace(TopicStr, "#", ".*"),
+    topic_amqp_to_re(NewTopicStr, 5);
+topic_amqp_to_re(TopicStr, 5) ->
+    lists:flatten([TopicStr, "$"]).
+
+
+
 % This fun transforms some rule by some other
 rebuild_args(Args, Dest) -> rebuild_args(Args, [], Dest).
 
 rebuild_args([], Ret, _) -> Ret;
-rebuild_args([ {<<"x-delq-main">>, longstr, <<>>} | Tail ], Ret, Dest = #resource{kind = queue, name = RName} ) ->
+rebuild_args([ {<<"x-dest-del">>, longstr, <<>>} | Tail ], Ret, Dest = #resource{kind = queue, name = RName} ) ->
     rebuild_args(Tail, [ {<<"x-delq-ontrue">>, longstr, RName} | Ret], Dest);
+rebuild_args([ {<<"x-dest-del">>, longstr, <<>>} | Tail ], Ret, Dest = #resource{kind = exchange, name = RName} ) ->
+    rebuild_args(Tail, [ {<<"x-dele-ontrue">>, longstr, RName} | Ret], Dest);
+rebuild_args([ {<<"x-?rkta">>, longstr, Topic} | Tail ], Ret, Dest) ->
+    ZZZ = topic_amqp_to_re(Topic),
+    rebuild_args(Tail, [ {<<"x-?rkre">>, longstr, erlang:list_to_binary(ZZZ)} | Ret], Dest);
+rebuild_args([ {<<"x-?rktaci">>, longstr, Topic} | Tail ], Ret, Dest) ->
+    ZZZ = topic_amqp_to_reci(Topic),
+    rebuild_args(Tail, [ {<<"x-?rkre">>, longstr, erlang:list_to_binary(ZZZ)} | Ret], Dest);
 rebuild_args([ Op | Tail ], Ret, Dest) ->
     rebuild_args(Tail, [ Op | Ret], Dest).
 
@@ -831,19 +897,20 @@ get_dests_operators(VHost, [_ | T], Dests, DestsRE) ->
 
 
 
-% Can the message decide routing facilities ?
-get_mdests_operators([], Result) -> Result;
-get_mdests_operators([{<<"x-msg-addq-ontrue">>, _, _} | T], << V:8, RE:8 >>) ->
-    NewV = V + 128, get_mdests_operators(T, << NewV, RE >>);
-get_mdests_operators([{<<"x-msg-adde-ontrue">>, _, _} | T], << V:8, RE:8 >>) ->
-    NewV = V + 32, get_mdests_operators(T, << NewV, RE >>);
-
-get_mdests_operators([{<<"x-msg-addqre-ontrue">>, _, _} | T], << V:8, RE:8 >>) ->
-    NewRE = RE + 128, get_mdests_operators(T, << V, NewRE >>);
-get_mdests_operators([{<<"x-msg-addq!re-ontrue">>, _, _} | T], << V:8, RE:8 >>) ->
-    NewRE = RE + 64, get_mdests_operators(T, << V, NewRE >>);
-get_mdests_operators([_ | T], Result) ->
-    get_mdests_operators(T, Result).
+% Operators decided by the message (by the producer)
+get_msg_ops([], Result) -> Result;
+get_msg_ops([{<<"x-msg-destq-rk">>, _, _} | T], << D:8, DRE:8, Opt:8 >>) ->
+    get_msg_ops(T, << D, DRE, (Opt + 128) >>);
+get_msg_ops([{<<"x-msg-addq-ontrue">>, _, _} | T], << D:8, DRE:8, Opt:8 >>) ->
+    get_msg_ops(T, << (D + 128), DRE, Opt >>);
+get_msg_ops([{<<"x-msg-adde-ontrue">>, _, _} | T], << D:8, DRE:8, Opt:8 >>) ->
+    get_msg_ops(T, << (D + 32), DRE, Opt >>);
+get_msg_ops([{<<"x-msg-addqre-ontrue">>, _, _} | T], << D:8, DRE:8, Opt:8 >>) ->
+    get_msg_ops(T, << D, (DRE + 128), Opt >>);
+get_msg_ops([{<<"x-msg-addq!re-ontrue">>, _, _} | T], << D:8, DRE:8, Opt:8 >>) ->
+    get_msg_ops(T, << D, (DRE + 64), Opt >>);
+get_msg_ops([_ | T], Result) ->
+    get_msg_ops(T, Result).
 
 
 %% Flatten one level for list of values (array)
@@ -876,7 +943,7 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     BindingOrder = get_binding_order(BindingArgs, 200),
     {GOT, GOF} = get_goto_operators(BindingArgs, {0, 0}),
     StopOperators = get_stop_operators(BindingArgs, {0, 0}),
-    MsgOps = get_mdests_operators(BindingArgs, << 0, 0 >>),
+    << MsgDests:8, MsgREDests:8, MsgOpt:8 >> = get_msg_ops(BindingArgs, << 0, 0, 0 >>),
     FlattenedBindindArgs = flatten_table(rebuild_args(BindingArgs, Dest)),
     MatchHKOps = get_match_hk_ops(FlattenedBindindArgs),
     MatchRKOps = get_match_rk_ops(FlattenedBindindArgs, []),
@@ -887,11 +954,11 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
         [] -> [];
         [#open_bindings{bindings = E}] -> E
     end,
-    NewBinding1 = {BindingOrder, BindingType, Dest, MatchOps},
-    NewBinding2 = case {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE, MsgOps} of
+    NewBinding1 = {BindingOrder, BindingType, Dest, MatchOps, << MsgOpt:8 >>},
+    NewBinding2 = case {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE, << MsgDests:8, MsgREDests:8 >>} of
         {0, 0, {0, 0}, [], [], [], [], nil, nil, nil, nil, nil, nil, nil, nil, <<0, 0>>} -> NewBinding1;
         {_, _, _, [], [], [], [], nil, nil, nil, nil, nil, nil, nil, nil, <<0, 0>>} -> erlang:append_element(NewBinding1, {GOT, GOF, StopOperators});
-        _ -> erlang:append_element(NewBinding1, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE, MsgOps})
+        _ -> erlang:append_element(NewBinding1, {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE, << MsgDests:8, MsgREDests:8 >>})
     end,
     NewBinding = erlang:append_element(NewBinding2, BindingId),
     NewBindings = lists:keysort(1, [NewBinding | CurrentOrderedBindings]),
@@ -915,12 +982,12 @@ remove_bindings(_, _, _) ->
     ok.
 
 remove_bindings_ids(_, [], Res) -> Res;
-remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,_,BId} | T], Res) ->
+remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,_,_,BId} | T], Res) ->
     case lists:member(BId, BindingIdsToDelete) of
         true -> remove_bindings_ids(BindingIdsToDelete, T, Res);
         _    -> remove_bindings_ids(BindingIdsToDelete, T, lists:append(Res, [Bind]))
     end;
-remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,BId} | T], Res) ->
+remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,_,BId} | T], Res) ->
     case lists:member(BId, BindingIdsToDelete) of
         true -> remove_bindings_ids(BindingIdsToDelete, T, Res);
         _    -> remove_bindings_ids(BindingIdsToDelete, T, lists:append(Res, [Bind]))
