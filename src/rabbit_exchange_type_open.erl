@@ -15,8 +15,8 @@
 %%
 
 -module(rabbit_exchange_type_open).
--include("rabbit.hrl").
--include("rabbit_framing.hrl").
+-include_lib("rabbit_common/include/rabbit.hrl").
+-include_lib("rabbit_common/include/rabbit_framing.hrl").
 
 -behaviour(rabbit_exchange_type).
 
@@ -324,7 +324,12 @@ validate_list_type_usage(all, [ {<<"x-?rk=", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with routing key = operator with binding type 'all'", []}};
 validate_list_type_usage(any, [ {<<"x-?rk!=", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with routing key != operator with binding type 'any'", []}};
-
+%%    rkta
+validate_list_type_usage(_, [ {<<"x-?rkta", _/binary>>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with routing key AMQP topic operator", []}};
+validate_list_type_usage(_, [ {<<"x-?rk!ta", _/binary>>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with routing key AMQP topic operator", []}};
+% HK eq and ne
 validate_list_type_usage(all, [ {<<"x-?hkv= ", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with = operator with binding type 'all'", []}};
 validate_list_type_usage(any, [ {<<"x-?hkv!= ", _/binary>>, array, _} | _ ], _) ->
@@ -394,9 +399,21 @@ validate_operators2([ {<<"x-?rkre">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ])
 validate_operators2([ {<<"x-?rk!re">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 
 validate_operators2([ {<<"x-?hkex">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hknx">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hk!ex">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+
+validate_operators2([ {<<"x-?hkis ", ?ONE_CHAR_AT_LEAST>>, longstr, <<"string">>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkis ", ?ONE_CHAR_AT_LEAST>>, longstr, <<"number">>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkis ", ?ONE_CHAR_AT_LEAST>>, longstr, <<"boolean">>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkis", _/binary>>, _, _} | _ ]) ->
+    {error, {binding_invalid, "Invalid declaration of x-?hkis operator", []}};
+validate_operators2([ {<<"x-?hk!is ", ?ONE_CHAR_AT_LEAST>>, longstr, <<"string">>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hk!is ", ?ONE_CHAR_AT_LEAST>>, longstr, <<"number">>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hk!is ", ?ONE_CHAR_AT_LEAST>>, longstr, <<"boolean">>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hk!is", _/binary>>, _, _} | _ ]) ->
+    {error, {binding_invalid, "Invalid declaration of x-?hk!is operator", []}};
 
 % Dests ops (exchanges)
+
 validate_operators2([ {<<"x-adde-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-adde-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-dele-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
@@ -423,17 +440,17 @@ validate_operators2([ {<<"x-msg-adde-ontrue">>, longstr, <<>>} | Tail ]) -> vali
 validate_operators2([ {<<"x-msg-destq-rk">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
 
 % Binding order
-validate_operators2([ {<<"x-order">>, _, V} | Tail ]) when is_integer(V), V > 1999, V < 16000 -> validate_operators2(Tail);
+validate_operators2([ {<<"x-order">>, _, V} | Tail ]) when is_integer(V), V > 999, V < 1000001 -> validate_operators2(Tail);
 validate_operators2([ {<<"x-order">>, _, _} | _ ]) ->
-    {error, {binding_invalid, "Binding's order must be an integer between 2000 and 15999", []}};
+    {error, {binding_invalid, "Binding's order must be an integer between 1000 and 1000000", []}};
 
 % Gotos
-validate_operators2([ {<<"x-goto-ontrue">>, _, V} | Tail ]) when is_integer(V), V > 1999, V < 16000 -> validate_operators2(Tail);
+validate_operators2([ {<<"x-goto-ontrue">>, _, V} | Tail ]) when is_integer(V), V > 999, V < 1000001 -> validate_operators2(Tail);
 validate_operators2([ {<<"x-goto-ontrue">>, _, _} | _ ]) ->
-    {error, {binding_invalid, "Binding's goto must be an integer between 2000 and 15999", []}};
-validate_operators2([ {<<"x-goto-onfalse">>, _, V} | Tail ]) when is_integer(V), V > 1999, V < 16000 -> validate_operators2(Tail);
+    {error, {binding_invalid, "Binding's goto must be an integer between 1000 and 1000000", []}};
+validate_operators2([ {<<"x-goto-onfalse">>, _, V} | Tail ]) when is_integer(V), V > 999, V < 1000001 -> validate_operators2(Tail);
 validate_operators2([ {<<"x-goto-onfalse">>, _, _} | _ ]) ->
-    {error, {binding_invalid, "Binding's goto must be an integer between 2000 and 15999", []}};
+    {error, {binding_invalid, "Binding's goto must be an integer between 1000 and 1000000", []}};
 
 % Stops
 validate_operators2([ {<<"x-stop-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
@@ -618,7 +635,7 @@ is_match_hkv_all([], _) -> true;
 is_match_hkv_all([{_, nx, _} | BNext], []) ->
     is_match_hkv_all(BNext, []);
 
-% No more message header but still match operator to check; return false
+% No more message header but still match operator to check other than nx; return false
 is_match_hkv_all(_, []) -> false;
 
 % Current header key not in match operators; go next header with current match operator
@@ -643,6 +660,27 @@ is_match_hkv_all([{_, nx, _} | _], _) -> false;
 % Current header key must exist; ok go next
 is_match_hkv_all([{_, ex, _} | BNext], [ _ | HNext]) ->
     is_match_hkv_all(BNext, HNext);
+
+% HK type checking
+%% Should do the same with shortstr ?
+is_match_hkv_all([{_, is, s} | BNext], HCur = [{_, longstr, _} | _]) ->
+    is_match_hkv_all(BNext, HCur);
+%% Should list by AMQP types to avoid corner cases when types are misused ?
+is_match_hkv_all([{_, is, n} | BNext], HCur = [{_, _, HV} | _]) when is_number(HV) ->
+    is_match_hkv_all(BNext, HCur);
+is_match_hkv_all([{_, is, b} | BNext], HCur = [{_, bool, _} | _]) ->
+    is_match_hkv_all(BNext, HCur);
+is_match_hkv_all([{_, is, _} | _], _) ->
+    false;
+is_match_hkv_all([{_, nis, s} | _], [{_, longstr, _} | _]) ->
+    false;
+is_match_hkv_all([{_, nis, n} | _], [{_, _, HV} | _]) when is_number(HV) ->
+    false;
+is_match_hkv_all([{_, nis, b} | _], [{_, bool, _} | _]) ->
+    false;
+is_match_hkv_all([{_, nis, _} | BNext], HCur) ->
+    is_match_hkv_all(BNext, HCur);
+
 % <= < = != > >=
 is_match_hkv_all([{_, ne, BV} | BNext], HCur = [{_, _, HV} | _])
     when BV /= HV -> is_match_hkv_all(BNext, HCur);
@@ -684,6 +722,8 @@ is_match_hkv_all([{_, nre, _} | _], _) -> false.
 
 % No more match operator to check; return false
 is_match_hkv_any([], _) -> false;
+% Yet some nx op without data; return true
+is_match_hkv_any([{_, nx, _} | _], []) -> true;
 % No more message header but still match operator to check; return false
 is_match_hkv_any(_, []) -> false;
 % Current header key not in match operators; go next header with current match operator
@@ -702,11 +742,31 @@ is_match_hkv_any([{BK, _, _} | BNext], HCur = [{HK, _, _} | _])
 is_match_hkv_any([{_, eq, BV} | _], [{_, _, HV} | _]) when BV == HV -> true;
 % Current header key must exist; return true
 is_match_hkv_any([{_, ex, _} | _], _) -> true;
+
+% HK type checking
+is_match_hkv_any([{_, is, s} | _], [{_, longstr, _} | _]) ->
+    true;
+is_match_hkv_any([{_, is, n} | _], [{_, _, HV} | _]) when is_number(HV) ->
+    true;
+is_match_hkv_any([{_, is, b} | _], [{_, bool, _} | _]) ->
+    true;
+is_match_hkv_any([{_, is, _} | BNext], HCur) ->
+    is_match_hkv_any(BNext, HCur);
+is_match_hkv_any([{_, nis, s} | BNext], HCur = [{_, longstr, _} | _]) ->
+    is_match_hkv_any(BNext, HCur);
+is_match_hkv_any([{_, nis, n} | BNext], HCur = [{_, _, HV} | _]) when is_number(HV) ->
+    is_match_hkv_any(BNext, HCur);
+is_match_hkv_any([{_, nis, b} | BNext], HCur = [{_, bool, _} | _]) ->
+    is_match_hkv_any(BNext, HCur);
+is_match_hkv_any([{_, nis, _} | _], _) ->
+    true;
+
 is_match_hkv_any([{_, ne, BV} | _], [{_, _, HV} | _]) when HV /= BV -> true;
-is_match_hkv_any([{_, gt, BV} | _], [{_, _, HV} | _]) when HV > BV -> true;
-is_match_hkv_any([{_, ge, BV} | _], [{_, _, HV} | _]) when HV >= BV -> true;
-is_match_hkv_any([{_, lt, BV} | _], [{_, _, HV} | _]) when HV < BV -> true;
-is_match_hkv_any([{_, le, BV} | _], [{_, _, HV} | _]) when HV =< BV -> true;
+
+is_match_hkv_any([{_, gt, BV} | _], [{_, _, HV} | _]) when is_number(HV), HV > BV -> true;
+is_match_hkv_any([{_, ge, BV} | _], [{_, _, HV} | _]) when is_number(HV), HV >= BV -> true;
+is_match_hkv_any([{_, lt, BV} | _], [{_, _, HV} | _]) when is_number(HV), HV < BV -> true;
+is_match_hkv_any([{_, le, BV} | _], [{_, _, HV} | _]) when is_number(HV), HV =< BV -> true;
 
 % Regexes
 is_match_hkv_any([{_, re, BV} | BNext], HCur = [ {_, longstr, HV} | _]) ->
@@ -750,16 +810,23 @@ topic_amqp_to_re(TopicStr, 5) ->
 rebuild_args(Args, Dest) -> rebuild_args(Args, [], Dest).
 
 rebuild_args([], Ret, _) -> Ret;
-rebuild_args([ {<<"x-dest-del">>, longstr, <<>>} | Tail ], Ret, Dest = #resource{kind = queue, name = RName} ) ->
+rebuild_args([ {<<"x-del-dest">>, longstr, <<>>} | Tail ], Ret, Dest = #resource{kind = queue, name = RName} ) ->
     rebuild_args(Tail, [ {<<"x-delq-ontrue">>, longstr, RName} | Ret], Dest);
-rebuild_args([ {<<"x-dest-del">>, longstr, <<>>} | Tail ], Ret, Dest = #resource{kind = exchange, name = RName} ) ->
+rebuild_args([ {<<"x-del-dest">>, longstr, <<>>} | Tail ], Ret, Dest = #resource{kind = exchange, name = RName} ) ->
     rebuild_args(Tail, [ {<<"x-dele-ontrue">>, longstr, RName} | Ret], Dest);
+%% rkta
 rebuild_args([ {<<"x-?rkta">>, longstr, Topic} | Tail ], Ret, Dest) ->
     ZZZ = topic_amqp_to_re(Topic),
     rebuild_args(Tail, [ {<<"x-?rkre">>, longstr, erlang:list_to_binary(ZZZ)} | Ret], Dest);
+rebuild_args([ {<<"x-?rk!ta">>, longstr, Topic} | Tail ], Ret, Dest) ->
+    ZZZ = topic_amqp_to_re(Topic),
+    rebuild_args(Tail, [ {<<"x-?rk!re">>, longstr, erlang:list_to_binary(ZZZ)} | Ret], Dest);
 rebuild_args([ {<<"x-?rktaci">>, longstr, Topic} | Tail ], Ret, Dest) ->
     ZZZ = topic_amqp_to_reci(Topic),
     rebuild_args(Tail, [ {<<"x-?rkre">>, longstr, erlang:list_to_binary(ZZZ)} | Ret], Dest);
+rebuild_args([ {<<"x-?rk!taci">>, longstr, Topic} | Tail ], Ret, Dest) ->
+    ZZZ = topic_amqp_to_reci(Topic),
+    rebuild_args(Tail, [ {<<"x-?rk!re">>, longstr, erlang:list_to_binary(ZZZ)} | Ret], Dest);
 rebuild_args([ Op | Tail ], Ret, Dest) ->
     rebuild_args(Tail, [ Op | Ret], Dest).
 
@@ -778,8 +845,22 @@ get_match_hk_ops([], Result) -> Result;
 get_match_hk_ops([ {<<"x-?hkex">>, _, V} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {V, ex, nil} | Res]);
 % Does a key NOT exist ?
-get_match_hk_ops([ {<<"x-?hknx">>, _, V} | Tail ], Res) ->
+get_match_hk_ops([ {<<"x-?hk!ex">>, _, V} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {V, nx, nil} | Res]);
+% Does a key exist and its value of type..
+get_match_hk_ops([ {<<"x-?hkis ", K/binary>>, _, <<"string">>} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, is, s} | Res]);
+get_match_hk_ops([ {<<"x-?hkis ", K/binary>>, _, <<"number">>} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, is, n} | Res]);
+get_match_hk_ops([ {<<"x-?hkis ", K/binary>>, _, <<"boolean">>} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, is, b} | Res]);
+% Does a key exist and its value NOT of type..
+get_match_hk_ops([ {<<"x-?hk!is ", K/binary>>, _, <<"string">>} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, nis, s} | Res]);
+get_match_hk_ops([ {<<"x-?hk!is ", K/binary>>, _, <<"number">>} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, nis, n} | Res]);
+get_match_hk_ops([ {<<"x-?hk!is ", K/binary>>, _, <<"boolean">>} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, nis, b} | Res]);
 
 % operators <= < = != > >=
 get_match_hk_ops([ {<<"x-?hkv<= ", K/binary>>, _, V} | Tail ], Res) ->
