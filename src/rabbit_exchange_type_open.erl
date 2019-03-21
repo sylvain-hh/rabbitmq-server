@@ -97,11 +97,9 @@ save_queues() ->
 % Store msg ops once
 save_msg_dops(Headers, VHost) ->
     FHeaders = flatten_table_msg(Headers, []),
-    {DQAT, DEAT, DQREAT, DQNREAT} = pack_msg_ops(FHeaders, VHost),
     {Dests, DestsRE} = pack_msg_ops(FHeaders, VHost),
-    MsgDs = {ordsets:from_list(DQAT), ordsets:from_list(DEAT), DQREAT, DQNREAT},
-    put(xopen_msg_ds, MsgDs),
-    MsgDs.
+    put(xopen_msg_ds, {Dests, DestsRE}),
+    {Dests, DestsRE}.
 
 
 %% Filter and flatten msg headers
@@ -240,41 +238,41 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}
     end,
     MsgAQT = case (BindDest band 1) of
         0 -> ordsets:from_list([]);
-        _ -> MAQT;
+        _ -> MAQT
     end,
     MsgAQF = case (BindDest band 2) of
         0 -> ordsets:from_list([]);
-        _ -> MAQF;
+        _ -> MAQF
     end,
     MsgAET = case (BindDest band 4) of
         0 -> ordsets:from_list([]);
-        _ -> MAET;
+        _ -> MAET
     end,
     MsgAEF = case (BindDest band 8) of
         0 -> ordsets:from_list([]);
-        _ -> MAEF;
+        _ -> MAEF
     end,
     MsgDQT = case (BindDest band 16) of
         0 -> ordsets:from_list([]);
-        _ -> MDQT;
+        _ -> MDQT
     end,
     MsgDQF = case (BindDest band 32) of
         0 -> ordsets:from_list([]);
-        _ -> MDQF;
+        _ -> MDQF
     end,
     MsgDET = case (BindDest band 64) of
         0 -> ordsets:from_list([]);
-        _ -> MDET;
+        _ -> MDET
     end,
     MsgDEF = case (BindDest band 128) of
         0 -> ordsets:from_list([]);
-        _ -> MDEF;
+        _ -> MDEF
     end,
     case {is_match(BindingType, MatchRk, RK, Args, Headers, MatchDt), StopOperators} of
         {true,{1,_}}  -> ordsets:subtract(ordsets:union([DAT, MsgAQT, MsgAET, ordsets:add_element(Dest, ResDests)]), ordsets:union([DDT, MsgDQT, MsgDET]));
-        {false,{_,1}} -> ordsets:subtract(ordsets:union([DAF, MsgAQF, MsgAEF, ResDests]), ordsets:union([DDF, MsgDQF, MsgDEF));
+        {false,{_,1}} -> ordsets:subtract(ordsets:union([DAF, MsgAQF, MsgAEF, ResDests]), ordsets:union([DDF, MsgDQF, MsgDEF]));
         {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:union([DAT, MsgAQT, MsgAET, ordsets:add_element(Dest, ResDests)]), ordsets:union([DDT, MsgDQT, MsgDET])));
-        {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union([DAF, MsgAQF, MsgAEF, ResDests]), ordsets:union([DDF, MsgDQF, MsgDEF)))
+        {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union([DAF, MsgAQF, MsgAEF, ResDests]), ordsets:union([DDF, MsgDQF, MsgDEF])))
     end;
 
 get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, _, {GOT, GOF, StopOperators, {DAT, DAF, DDT, DDF}, {DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE}, <<BindDest:8, BindREDest:8>>}, _} | T ], _, ResDests) ->
@@ -289,35 +287,35 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}
 
     MsgAQT = case (BindDest band 1) of
         0 -> ordsets:from_list([]);
-        _ -> MAQT;
+        _ -> MAQT
     end,
     MsgAQF = case (BindDest band 2) of
         0 -> ordsets:from_list([]);
-        _ -> MAQF;
+        _ -> MAQF
     end,
     MsgAET = case (BindDest band 4) of
         0 -> ordsets:from_list([]);
-        _ -> MAET;
+        _ -> MAET
     end,
     MsgAEF = case (BindDest band 8) of
         0 -> ordsets:from_list([]);
-        _ -> MAEF;
+        _ -> MAEF
     end,
     MsgDQT = case (BindDest band 16) of
         0 -> ordsets:from_list([]);
-        _ -> MDQT;
+        _ -> MDQT
     end,
     MsgDQF = case (BindDest band 32) of
         0 -> ordsets:from_list([]);
-        _ -> MDQF;
+        _ -> MDQF
     end,
     MsgDET = case (BindDest band 64) of
         0 -> ordsets:from_list([]);
-        _ -> MDET;
+        _ -> MDET
     end,
     MsgDEF = case (BindDest band 128) of
         0 -> ordsets:from_list([]);
-        _ -> MDEF;
+        _ -> MDEF
     end,
 
     MsgAQRT = case (BindREDest band 1 /= 0 andalso MAQRT /= nil) of
@@ -1103,24 +1101,6 @@ get_dests_operators(VHost, [_ | T], Dests, DestsRE) ->
     get_dests_operators(VHost, T, Dests, DestsRE).
 
 
-
-% Operators decided by the message (by the producer)
-get_msg_ops([], Result) -> Result;
-%% Cas 'direct' (default ?)
-get_msg_ops([{<<"x-msg-destq-rk">>, _, _} | T], << D:8, DRE:8, Opt:8 >>) ->
-    get_msg_ops(T, << D, DRE, (Opt + 128) >>);
-%% Routing facilities :
-get_msg_ops([{<<"x-msg-addq-ontrue">>, _, _} | T], << D:8, DRE:8, Opt:8 >>) ->
-    get_msg_ops(T, << (D + 128), DRE, Opt >>);
-get_msg_ops([{<<"x-msg-adde-ontrue">>, _, _} | T], << D:8, DRE:8, Opt:8 >>) ->
-    get_msg_ops(T, << (D + 32), DRE, Opt >>);
-get_msg_ops([{<<"x-msg-addqre-ontrue">>, _, _} | T], << D:8, DRE:8, Opt:8 >>) ->
-    get_msg_ops(T, << D, (DRE + 128), Opt >>);
-get_msg_ops([{<<"x-msg-addq!re-ontrue">>, _, _} | T], << D:8, DRE:8, Opt:8 >>) ->
-    get_msg_ops(T, << D, (DRE + 64), Opt >>);
-get_msg_ops([_ | T], Result) ->
-    get_msg_ops(T, Result).
-
 %% Operators decided by the message (by the producer)
 get_msg_ops([], Result) -> Result;
 % Replace dest by rk
@@ -1194,7 +1174,6 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     MatchRKOps = get_match_rk_ops(FlattenedBindindArgs, []),
     MatchDTOps = get_match_dt_ops(FlattenedBindindArgs, []),
     MatchOps = {MatchHKOps, MatchRKOps, MatchDTOps},
-    {{DAT, DAF, DDT, DDF}, {DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE}} = get_dests_operators(VHost, FlattenedBindindArgs),
     DefaultDests = {ordsets:new(), ordsets:new(), ordsets:new(), ordsets:new()},
     {Dests, DestsRE} = get_dests_operators(VHost, FlattenedBindindArgs, DefaultDests, ?DEFAULT_DESTS_RE),
     CurrentOrderedBindings = case mnesia:read(?TABLE, XName, write) of
@@ -1202,7 +1181,6 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
         [#?RECORD{?RECVALUE = E}] -> E
     end,
     NewBinding1 = {BindingOrder, BindingType, Dest, MatchOps, << MsgDestsOpt:8 >>},
-    NewBinding2 = case {GOT, GOF, StopOperators, DAT, DAF, DDT, DDF, DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE, << MsgDests:8, MsgDestsRE:8 >>} of
     NewBinding2 = case {GOT, GOF, StopOperators, Dests, DestsRE, << MsgDests:8, MsgDestsRE:8 >>} of
         {0, 0, {0, 0}, DefaultDests, ?DEFAULT_DESTS_RE, <<0, 0>>} -> NewBinding1;
         {_, _, _, DefaultDests, ?DEFAULT_DESTS_RE, <<0, 0>>} -> erlang:append_element(NewBinding1, {GOT, GOF, StopOperators});
