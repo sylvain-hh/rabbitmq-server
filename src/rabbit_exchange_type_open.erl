@@ -62,7 +62,7 @@ info(_X) -> [].
 info(_X, _) -> [].
 
 
--define(DEFAULT_DESTS_RE, {nil, nil, nil, nil, nil, nil, nil, nil}).
+-define(DEFAULT_DESTS_RE, {nil,nil,nil,nil,nil,nil,nil,nil}).
 
 serialise_events() -> false.
 
@@ -131,7 +131,8 @@ flatten_table_msg ([ _ | Tail ], Result) ->
         flatten_table_msg (Tail, Result).
 
 % Group msg ops
-pack_msg_ops(Args, VHost) -> pack_msg_ops(Args, VHost, {[],[],[],[],[],[],[],[]}, {[],[],[],[],[],[],[],[]}).
+pack_msg_ops(Args, VHost) ->
+    pack_msg_ops(Args, VHost, {[],[],[],[],[],[],[],[]}, ?DEFAULT_DESTS_RE).
 % Stop on no more headers
 pack_msg_ops([], _, Dests, DestsRE) ->
     {Dests, DestsRE};
@@ -150,14 +151,14 @@ pack_msg_ops([ {K, _, V} | Tail ], VHost, Dests, DestsRE) ->
     end,
     {AQRT, AQRF, DQRT, DQRF, AQNRT, AQNRF, DQNRT, DQNRF} = DestsRE,
     NewDestsRE = case K of
-        <<"x-addqre-ontrue">> -> {[V], AQRF, DQRT, DQRF, AQNRT, AQNRF, DQNRT, DQNRF};
-        <<"x-addqre-onfalse">> -> {AQRT, [V], DQRT, DQRF, AQNRT, AQNRF, DQNRT, DQNRF};
-        <<"x-delqre-ontrue">> -> {AQRT, AQRF, [V], DQRF, AQNRT, AQNRF, DQNRT, DQNRF};
-        <<"x-delqre-onfalse">> -> {AQRT, AQRF, DQRT, [V], AQNRT, AQNRF, DQNRT, DQNRF};
-        <<"x-addq!re-ontrue">> -> {AQRT, AQRF, DQRT, DQRF, [V], AQNRF, DQNRT, DQNRF};
-        <<"x-addq!re-onfalse">> -> {AQRT, AQRF, DQRT, DQRF, AQNRT, [V], DQNRT, DQNRF};
-        <<"x-delq!re-ontrue">> -> {AQRT, AQRF, DQRT, DQRF, AQNRT, AQNRF, [V], DQNRF};
-        <<"x-delq!re-onfalse">> -> {AQRT, AQRF, DQRT, DQRF, AQNRT, AQNRF, DQNRT, [V]};
+        <<"x-addqre-ontrue">> -> {V, AQRF, DQRT, DQRF, AQNRT, AQNRF, DQNRT, DQNRF};
+        <<"x-addqre-onfalse">> -> {AQRT, V, DQRT, DQRF, AQNRT, AQNRF, DQNRT, DQNRF};
+        <<"x-delqre-ontrue">> -> {AQRT, AQRF, V, DQRF, AQNRT, AQNRF, DQNRT, DQNRF};
+        <<"x-delqre-onfalse">> -> {AQRT, AQRF, DQRT, V, AQNRT, AQNRF, DQNRT, DQNRF};
+        <<"x-addq!re-ontrue">> -> {AQRT, AQRF, DQRT, DQRF, V, AQNRF, DQNRT, DQNRF};
+        <<"x-addq!re-onfalse">> -> {AQRT, AQRF, DQRT, DQRF, AQNRT, V, DQNRT, DQNRF};
+        <<"x-delq!re-ontrue">> -> {AQRT, AQRF, DQRT, DQRF, AQNRT, AQNRF, V, DQNRF};
+        <<"x-delq!re-onfalse">> -> {AQRT, AQRF, DQRT, DQRF, AQNRT, AQNRF, DQNRT, V};
         _ -> DestsRE
     end,
     pack_msg_ops(Tail, VHost, NewDests, NewDestsRE).
@@ -231,6 +232,7 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}
         {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:union(DAT, ordsets:add_element(Dest, ResDests)), DDT));
         {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union(DAF, ResDests), DDF))
     end;
+
 get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, _, {GOT, GOF, StopOperators, {DAT, DAF, DDT, DDF}, ?DEFAULT_DESTS_RE, <<BindDest:8, 0>>}, _} | T ], _, ResDests) ->
     {{MAQT, MAQF, MAET, MAEF, MDQT, MDQF, MDET, MDEF}, _} = case get(xopen_msg_ds) of
         undefined -> save_msg_dops(Headers, get(xopen_vhost));
@@ -274,6 +276,7 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}
         {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:union([DAT, MsgAQT, MsgAET, ordsets:add_element(Dest, ResDests)]), ordsets:union([DDT, MsgDQT, MsgDET])));
         {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union([DAF, MsgAQF, MsgAEF, ResDests]), ordsets:union([DDF, MsgDQF, MsgDEF)))
     end;
+
 get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}, _, {GOT, GOF, StopOperators, {DAT, DAF, DDT, DDF}, {DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE}, <<BindDest:8, BindREDest:8>>}, _} | T ], _, ResDests) ->
     AllVHQueues = case get(xopen_allqs) of
         undefined -> save_queues();
@@ -283,6 +286,7 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}
         undefined -> save_msg_dops(Headers, get(xopen_vhost));
         V -> V
     end,
+
     MsgAQT = case (BindDest band 1) of
         0 -> ordsets:from_list([]);
         _ -> MAQT;
@@ -316,14 +320,37 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}
         _ -> MDEF;
     end,
 
-
-    MsgDQREAT2 = case ((BindREDest bsr 7) band 1 == 1 andalso MsgDQREAT /= nil) of
+    MsgAQRT = case (BindREDest band 1 /= 0 andalso MAQRT /= nil) of
         false -> ordsets:from_list([]);
-        true -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, MsgDQREAT, [ report_errors, {capture, none} ]) == match])
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, MAQRT, [ report_errors, {capture, none} ]) == match])
     end,
-    MsgDQNREAT2 = case ((BindREDest bsr 6) band 1 == 1 andalso MsgDQNREAT /= nil) of
+    MsgAQRF = case (BindREDest band 2 /= 0 andalso MAQRF /= nil) of
         false -> ordsets:from_list([]);
-        true -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, MsgDQNREAT, [ report_errors, {capture, none} ]) /= match])
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, MAQRF, [ report_errors, {capture, none} ]) == match])
+    end,
+    MsgDQRT = case (BindREDest band 16 /= 0 andalso MDQRT /= nil) of
+        false -> ordsets:from_list([]);
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, MDQRT, [ report_errors, {capture, none} ]) == match])
+    end,
+    MsgDQRF = case (BindREDest band 32 /= 0 andalso MDQRF /= nil) of
+        false -> ordsets:from_list([]);
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, MDQRF, [ report_errors, {capture, none} ]) == match])
+    end,
+    MsgAQNRT = case (BindREDest band 1 /= 0 andalso MAQNRT /= nil) of
+        false -> ordsets:from_list([]);
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, MAQNRT, [ report_errors, {capture, none} ]) /= match])
+    end,
+    MsgAQNRF = case (BindREDest band 2 /= 0 andalso MAQNRF /= nil) of
+        false -> ordsets:from_list([]);
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, MAQNRF, [ report_errors, {capture, none} ]) /= match])
+    end,
+    MsgDQNRT = case (BindREDest band 16 /= 0 andalso MDQNRT /= nil) of
+        false -> ordsets:from_list([]);
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, MDQNRT, [ report_errors, {capture, none} ]) /= match])
+    end,
+    MsgDQNRF = case (BindREDest band 32 /= 0 andalso MDQNRF /= nil) of
+        false -> ordsets:from_list([]);
+        _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, MDQNRF, [ report_errors, {capture, none} ]) /= match])
     end,
 
     DATREsult = case DATRE of
@@ -358,11 +385,12 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {Args, MatchRk, MatchDt}
         nil -> ordsets:from_list([]);
         _ -> ordsets:from_list([Q || Q = #resource{name = QueueName, kind=queue} <- ResDests, re:run(QueueName, DDFNRE, [ {capture, none} ]) /= match])
     end,
+
     case {is_match(BindingType, MatchRk, RK, Args, Headers, MatchDt), StopOperators} of
-        {true,{1,_}}  -> ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,MsgDQAT2,MsgDEAT2,MsgDQREAT2,MsgDQNREAT2,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult]));
-        {false,{_,1}} -> ordsets:subtract(ordsets:union([DAF,DAFREsult,DAFNREsult,ResDests]), ordsets:union([DDF,DDFREsult,DDFNREsult]));
-        {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,MsgDQAT2,MsgDEAT2,MsgDQREAT2,MsgDQNREAT2,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult])));
-        {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union([DAF,DAFREsult,DAFNREsult,ResDests]), ordsets:union([DDF,DDFREsult,DDFNREsult])))
+        {true,{1,_}}  -> ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,MsgAQT,MsgAET,MsgAQRT,MsgAQNRT,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult,MsgDQT,MsgDET,MsgDQRT,MsgDQNRT]));
+        {false,{_,1}} -> ordsets:subtract(ordsets:union([DAF,DAFREsult,DAFNREsult,MsgAQF,MsgAEF,MsgAQRF,MsgAQNRF,ResDests]), ordsets:union([DDF,DDFREsult,DDFNREsult,MsgDQF,MsgDEF,MsgDQRF,MsgDQNRF]));
+        {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,MsgAQT,MsgAET,MsgAQRT,MsgAQNRT,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult,MsgDQT,MsgDET,MsgDQRT,MsgDQNRT])));
+        {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union([DAF,DAFREsult,DAFNREsult,MsgAQF,MsgAEF,MsgAQRF,MsgAQNRF,ResDests]), ordsets:union([DDF,DDFREsult,DDFNREsult,MsgDQF,MsgDEF,MsgDQRF,MsgDQNRF])))
     end.
 
 
