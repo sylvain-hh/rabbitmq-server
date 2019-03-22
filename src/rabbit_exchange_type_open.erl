@@ -57,6 +57,7 @@ init_db() ->
 
 
 -define(ONE_CHAR_AT_LEAST, _/utf8, _/binary).
+-define(BIN, _/binary).
 
 info(_X) -> [].
 info(_X, _) -> [].
@@ -169,10 +170,15 @@ route(#exchange{name = #resource{virtual_host = VHost} = Name},
     erase(xopen_dtl),
     erase(xopen_allqs),
     erase(xopen_msg_ds),
-    Headers = case (Content#content.properties)#'P_basic'.headers of
+
+    MsgProperties = Content#content.properties,
+    MsgContentSize = iolist_size(Content#content.payload_fragments_rev),
+
+    Headers = case MsgProperties#'P_basic'.headers of
                   undefined -> [];
                   H         -> rabbit_misc:sort_field_table(H)
               end,
+
     CurrentOrderedBindings = case ets:lookup(?TABLE, Name) of
         [] -> [];
         [#?RECORD{?RECVALUE = Bs}] -> Bs
@@ -403,36 +409,69 @@ validate_binding(_X, #binding{args = Args, key = << >>, destination = Dest}) ->
     case rabbit_misc:table_lookup(Args2, <<"x-match">>) of
         {longstr, <<"all">>} -> validate_list_type_usage(all, Args2);
         {longstr, <<"any">>} -> validate_list_type_usage(any, Args2);
-        {longstr, Other}     -> {error,
-                                 {binding_invalid,
-                                  "Invalid x-match field value ~p; "
-                                  "expected all or any", [Other]}};
-        {Type,    Other}     -> {error,
-                                 {binding_invalid,
-                                  "Invalid x-match field type ~p (value ~p); "
-                                  "expected longstr", [Type, Other]}};
-        undefined            -> validate_list_type_usage(all, Args2)
+        undefined            -> validate_list_type_usage(all, Args2);
+        _ -> {error, {binding_invalid, "Invalid x-match operator", []}}
     end;
 validate_binding(_X, _) ->
-    {error, {binding_invalid, "Invalid binding's routing key declaration in x-open exchange", []}}.
+    {error, {binding_invalid, "Forbidden declaration of binding's routing key", []}}.
 
 
-%% Binding's header keys of type 'list' must be validated
+%% PROHIBIT ARRAY USAGE IN ANY RE (rkre..) EXCEPTED FOR RKTA !
+
+%% Binding's args keys of type 'list' must be validated
+%% --------------------------------------------------------------------------------
 validate_list_type_usage(BindingType, Args) ->
     validate_list_type_usage(BindingType, Args, Args).
+% OK go to next validation
+validate_list_type_usage(_, [], Args) ->
+    validate_no_deep_lists(Args);
+% Attributes = and !=
+validate_list_type_usage(all, [ {<<"x-?at=", ?BIN>>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with = operator in binding type 'all'", []}};
+validate_list_type_usage(any, [ {<<"x-?at!=", ?BIN>>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with != operator in binding type 'any'", []}};
+% Attributes REGEX
+validate_list_type_usage(_, [ {<<"x-?atre", ?BIN>>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with regular expression", []}};
+validate_list_type_usage(_, [ {<<"x-?at!re", ?BIN>>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with regular expression", []}};
+% Attributes < >
+validate_list_type_usage(_, [ {<<"x-?at<", ?BIN>>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with < or > operator", []}};
+validate_list_type_usage(_, [ {<<"x-?at>", ?BIN>>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with < or > operator", []}};
 
-validate_list_type_usage(_, [], Args) -> validate_no_deep_lists(Args);
-% Routing key ops
-validate_list_type_usage(all, [ {<<"x-?rk=", _/binary>>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with routing key = operator with binding type 'all'", []}};
-validate_list_type_usage(any, [ {<<"x-?rk!=", _/binary>>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with routing key != operator with binding type 'any'", []}};
-%%    rkta
+% Payload content and size = and !=
+validate_list_type_usage(all, [ {<<"x-?pl=">>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with = operator in binding type 'all'", []}};
+validate_list_type_usage(any, [ {<<"x-?pl!=", ?BIN>>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with != operator in binding type 'any'", []}};
+validate_list_type_usage(all, [ {<<"x-?plsz=">>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with = operator in binding type 'all'", []}};
+validate_list_type_usage(any, [ {<<"x-?plsz!=", ?BIN>>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with != operator in binding type 'any'", []}};
+% Payload content REGEX
+validate_list_type_usage(_, [ {<<"x-?plre">>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with regular expression", []}};
+validate_list_type_usage(_, [ {<<"x-?pl!re">>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with regular expression", []}};
+% Payload size < >
+validate_list_type_usage(_, [ {<<"x-?plsz<", ?BIN>>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with < or > operator", []}};
+validate_list_type_usage(_, [ {<<"x-?plsz>", ?BIN>>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with < or > operator", []}};
+
+% Routing Key = and !=
+validate_list_type_usage(all, [ {<<"x-?rk=">>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with = operator in binding type 'all'", []}};
+validate_list_type_usage(any, [ {<<"x-?rk!=">>, array, _} | _ ], _) ->
+    {error, {binding_invalid, "Invalid use of list type with != operator in binding type 'any'", []}};
+% Routing Key AMQP Topic
 validate_list_type_usage(_, [ {<<"x-?rkta", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with routing key AMQP topic operator", []}};
 validate_list_type_usage(_, [ {<<"x-?rk!ta", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with routing key AMQP topic operator", []}};
-% HK eq and ne
+% Header Key = and !=
 validate_list_type_usage(all, [ {<<"x-?hkv= ", _/binary>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with = operator with binding type 'all'", []}};
 validate_list_type_usage(any, [ {<<"x-?hkv!= ", _/binary>>, array, _} | _ ], _) ->
@@ -456,6 +495,7 @@ validate_list_type_usage(BindingType, [ _ | Tail ], Args) ->
 
 
 %% Binding can't have array in array :
+%% --------------------------------------------------------------------------------
 validate_no_deep_lists(Args) -> 
     validate_no_deep_lists(Args, [], Args).
 
@@ -471,6 +511,7 @@ validate_no_deep_lists([ _ | Tail ], _, Args) ->
 
 
 %% Binding is INvalidated if some rule does not match anything,
+%% -----------------------------------------------------------------------------
 %%  so that we can't have some "unexpected" results
 validate_operators(Args) ->
   FlattenedArgs = flatten_table(Args),
@@ -480,14 +521,45 @@ validate_operators(Args) ->
   end.
 
 validate_operators2([]) -> ok;
-% x-match have been checked first, so that we don't check type or value
-validate_operators2([ {<<"x-match">>, _, _} | Tail ]) -> validate_operators2(Tail);
-% Decimal type is a pain to compare with other numeric types's values, so this is forbidden.
+% x-match have been checked upstream due to checks on list type
+validate_operators2([ {<<"x-match">>, _, _} | Tail ]) ->
+    validate_operators2(Tail);
+% Decimal type is forbidden
 validate_operators2([ {_, decimal, _} | _ ]) ->
-    {error, {binding_invalid, "Decimal type is invalid in x-open", []}};
+    {error, {binding_invalid, "Usage of decimal type is forbidden", []}};
 % Do not think that can't happen... it can ! :)
 validate_operators2([ {<<>>, _, _} | _ ]) ->
-    {error, {binding_invalid, "Binding's rule key can't be void", []}};
+    {error, {binding_invalid, "Binding's argument key can't be empty", []}};
+
+% Attributes
+validate_operators2([ {ArgKey = <<"x-?at", ?BIN>>, longstr, _} | Tail ]) ->
+    case binary:split(ArgKey, <<" ">>) of
+        [AttrOp, AttrName] when (
+             AttrName==<<"content_type">> orelse AttrName==<<"content_encoding">>
+             orelse AttrName==<<"correlation_id">> orelse AttrName==<<"reply_to">>
+             orelse AttrName==<<"expiration">> orelse AttrName==<<"message_id">>
+             orelse AttrName==<<"type">> orelse  AttrName==<<"user_id">>
+             orelse AttrName==<<"app_id">> orelse  AttrName==<<"cluster_id">>
+             ) andalso (
+             AttrOp==<<"x-?at=">> orelse AttrOp==<<"x-?at!=">>
+             orelse AttrOp==<<"x-?atre">> orelse AttrOp==<<"x-?at!re">>
+             ) -> validate_operators2(Tail);
+        _ -> {error, {binding_invalid, "Invalid attribute operator", []}}
+    end;
+validate_operators2([ {ArgKey = <<"x-?at", ?BIN>>, _, N} | Tail ]) when is_number(N) ->
+    case binary:split(ArgKey, <<" ">>) of
+        [AttrOp, AttrName] when (
+             AttrName==<<"delivery_mode">> orelse AttrName==<<"priority">>
+             orelse AttrName==<<"timestamp">>
+             ) andalso (
+             AttrOp==<<"x-?at=">> orelse AttrOp==<<"x-?at!=">>
+             orelse AttrOp==<<"x-?at<">> orelse AttrOp==<<"x-?at<=">>
+             orelse AttrOp==<<"x-?at>=">> orelse AttrOp==<<"x-?at>">>
+             ) -> validate_operators2(Tail);
+        _ -> {error, {binding_invalid, "Invalid attribute operator", []}}
+    end;
+validate_operators2([ {<<"x-?at", ?BIN>>, _, _} | _ ]) ->
+    {error, {binding_invalid, "Invalid attribute operator", []}};
 
 % Datettime match ops
 validate_operators2([ {<<"x-?dture">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
