@@ -15,8 +15,8 @@
 %%
 
 -module(rabbit_exchange_type_open).
--include_lib("rabbit_common/include/rabbit.hrl").
--include_lib("rabbit_common/include/rabbit_framing.hrl").
+-include("rabbit.hrl").
+-include("rabbit_framing.hrl").
 
 -behaviour(rabbit_exchange_type).
 
@@ -537,9 +537,21 @@ validate_operators2([ {<<"x-delq!re-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>}
 
 % Dests ops (msg)
 validate_operators2([ {<<"x-msg-addq-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-msg-addqre-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-msg-addq!re-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-msg-addq-onfalse">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
 validate_operators2([ {<<"x-msg-adde-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-msg-adde-onfalse">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-msg-delq-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-msg-delq-onfalse">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-msg-dele-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-msg-dele-onfalse">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-msg-addqre-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-msg-addqre-onfalse">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-msg-delqre-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-msg-delqre-onfalse">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-msg-adde-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-msg-adde-onfalse">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-msg-dele-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-msg-dele-onfalse">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
 
 validate_operators2([ {<<"x-msg-destq-rk">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
 
