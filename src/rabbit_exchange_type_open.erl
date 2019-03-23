@@ -173,18 +173,19 @@ route(#exchange{name = #resource{virtual_host = VHost} = Name},
 
     MsgContentSize = iolist_size(Content#content.payload_fragments_rev),
 
-    MsgProperties = Content#content.properties,
-    
-    Headers = case MsgProperties#'P_basic'.headers of
-                  undefined -> [];
-                  H         -> rabbit_misc:sort_field_table(H)
-              end,
+    MsgProperties = Content#content.properties#'P_basic'{headers =
+        case Content#content.properties#'P_basic'.headers of
+            undefined -> [];
+            Table     -> lists:keysort(1, Table)
+        end
+    },
+    % MsgProperties#'P_basic'.headers
 
     CurrentOrderedBindings = case ets:lookup(?TABLE, Name) of
         [] -> [];
         [#?RECORD{?RECVALUE = Bs}] -> Bs
     end,
-    get_routes({RK, Headers}, CurrentOrderedBindings, 0, ordsets:new()).
+    get_routes({RK, MsgProperties}, CurrentOrderedBindings, 0, ordsets:new()).
 
 
 % We must avoid unecessary call to save_datetimes
@@ -209,15 +210,15 @@ is_match(BindingType, RKRules, RK, HKRules, Headers, MatchDt) ->
 get_routes(_, [], _, ResDests) ->
     ordsets:to_list(ResDests);
 
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules}, << 0 >>, _} | T ], _, ResDests) ->
-    case is_match(BindingType, RKRules, RK, HKRules, Headers, DTRules) of
+get_routes(Data={RK, MsgProps}, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules}, << 0 >>, _} | T ], _, ResDests) ->
+    case is_match(BindingType, RKRules, RK, HKRules, MsgProps#'P_basic'.headers, DTRules) of
         true -> get_routes(Data, T, 0, ordsets:add_element(Dest, ResDests));
            _ -> get_routes(Data, T, 0, ResDests)
     end;
 
 % Simplest like direct's exchange type
-get_routes(Data={RK, Headers}, [ {_, BindingType, _, {HKRules, RKRules, DTRules, ATRules}, << 128 >>, _} | T ], _, ResDests) ->
-    case is_match(BindingType, RKRules, RK, HKRules, Headers, DTRules) of
+get_routes(Data={RK, MsgProps}, [ {_, BindingType, _, {HKRules, RKRules, DTRules, ATRules}, << 128 >>, _} | T ], _, ResDests) ->
+    case is_match(BindingType, RKRules, RK, HKRules, MsgProps#'P_basic'.headers, DTRules) of
         true -> get_routes(Data, T, 0, ordsets:add_element(rabbit_misc:r(get(xopen_vhost), queue, RK), ResDests));
            _ -> get_routes(Data, T, 0, ResDests)
     end;
@@ -231,25 +232,25 @@ get_routes(Data = {RK, _}, [ {Order, BindingType, _, MatchOps, << 128 >>, Other,
     NewDest = rabbit_misc:r(get(xopen_vhost), queue, RK),
     get_routes(Data, [{Order, BindingType, NewDest, MatchOps, << 0 >>, Other, BindingId} | T], GotoOrder, ResDests);
 
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules}, _, {GOT, GOF, StopOperators}, _} | T ], _, ResDests) ->
-    case {is_match(BindingType, RKRules, RK, HKRules, Headers, DTRules), StopOperators} of
+get_routes(Data={RK, MsgProps}, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules}, _, {GOT, GOF, StopOperators}, _} | T ], _, ResDests) ->
+    case {is_match(BindingType, RKRules, RK, HKRules, MsgProps#'P_basic'.headers, DTRules), StopOperators} of
         {true,{1,_}}  -> ordsets:add_element(Dest, ResDests);
         {false,{_,1}} -> ResDests;
         {true,_}      -> get_routes(Data, T, GOT, ordsets:add_element(Dest, ResDests));
         {false,_}     -> get_routes(Data, T, GOF, ResDests)
     end;
 
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules}, _, {GOT, GOF, StopOperators, {DAT, DAF, DDT, DDF}, ?DEFAULT_DESTS_RE, <<0, 0>>}, _} | T ], _, ResDests) ->
-    case {is_match(BindingType, RKRules, RK, HKRules, Headers, DTRules), StopOperators} of
+get_routes(Data={RK, MsgProps}, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules}, _, {GOT, GOF, StopOperators, {DAT, DAF, DDT, DDF}, ?DEFAULT_DESTS_RE, <<0, 0>>}, _} | T ], _, ResDests) ->
+    case {is_match(BindingType, RKRules, RK, HKRules, MsgProps#'P_basic'.headers, DTRules), StopOperators} of
         {true,{1,_}}  -> ordsets:subtract(ordsets:union(DAT, ordsets:add_element(Dest, ResDests)), DDT);
         {false,{_,1}} -> ordsets:subtract(ordsets:union(DAF, ResDests), DDF);
         {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:union(DAT, ordsets:add_element(Dest, ResDests)), DDT));
         {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union(DAF, ResDests), DDF))
     end;
 
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules}, _, {GOT, GOF, StopOperators, {DAT, DAF, DDT, DDF}, ?DEFAULT_DESTS_RE, <<BindDest:8, 0>>}, _} | T ], _, ResDests) ->
+get_routes(Data={RK, MsgProps}, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules}, _, {GOT, GOF, StopOperators, {DAT, DAF, DDT, DDF}, ?DEFAULT_DESTS_RE, <<BindDest:8, 0>>}, _} | T ], _, ResDests) ->
     {{MAQT, MAQF, MAET, MAEF, MDQT, MDQF, MDET, MDEF}, _} = case get(xopen_msg_ds) of
-        undefined -> save_msg_dops(Headers, get(xopen_vhost));
+        undefined -> save_msg_dops(MsgProps#'P_basic'.headers, get(xopen_vhost));
         V -> V
     end,
     MsgAQT = case (BindDest band 1) of
@@ -284,20 +285,20 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {HKRules, RKRules, DTRul
         0 -> ordsets:from_list([]);
         _ -> MDEF
     end,
-    case {is_match(BindingType, RKRules, RK, HKRules, Headers, DTRules), StopOperators} of
+    case {is_match(BindingType, RKRules, RK, HKRules, MsgProps#'P_basic'.headers, DTRules), StopOperators} of
         {true,{1,_}}  -> ordsets:subtract(ordsets:union([DAT, MsgAQT, MsgAET, ordsets:add_element(Dest, ResDests)]), ordsets:union([DDT, MsgDQT, MsgDET]));
         {false,{_,1}} -> ordsets:subtract(ordsets:union([DAF, MsgAQF, MsgAEF, ResDests]), ordsets:union([DDF, MsgDQF, MsgDEF]));
         {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:union([DAT, MsgAQT, MsgAET, ordsets:add_element(Dest, ResDests)]), ordsets:union([DDT, MsgDQT, MsgDET])));
         {false,_}     -> get_routes(Data, T, GOF, ordsets:subtract(ordsets:union([DAF, MsgAQF, MsgAEF, ResDests]), ordsets:union([DDF, MsgDQF, MsgDEF])))
     end;
 
-get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules}, _, {GOT, GOF, StopOperators, {DAT, DAF, DDT, DDF}, {DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE}, <<BindDest:8, BindREDest:8>>}, _} | T ], _, ResDests) ->
+get_routes(Data={RK, MsgProps}, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules}, _, {GOT, GOF, StopOperators, {DAT, DAF, DDT, DDF}, {DATRE, DAFRE, DDTRE, DDFRE, DATNRE, DAFNRE, DDTNRE, DDFNRE}, <<BindDest:8, BindREDest:8>>}, _} | T ], _, ResDests) ->
     AllVHQueues = case get(xopen_allqs) of
         undefined -> save_queues();
         Res1 -> Res1
     end,
     {{MAQT, MAQF, MAET, MAEF, MDQT, MDQF, MDET, MDEF}, {MAQRT, MAQRF, MDQRT, MDQRF, MAQNRT, MAQNRF, MDQNRT, MDQNRF}} = case get(xopen_msg_ds) of
-        undefined -> save_msg_dops(Headers, get(xopen_vhost));
+        undefined -> save_msg_dops(MsgProps#'P_basic'.headers, get(xopen_vhost));
         V -> V
     end,
 
@@ -400,7 +401,7 @@ get_routes(Data={RK, Headers}, [ {_, BindingType, Dest, {HKRules, RKRules, DTRul
         _ -> ordsets:from_list([Q || Q = #resource{name = QueueName, kind=queue} <- ResDests, re:run(QueueName, DDFNRE, [ {capture, none} ]) /= match])
     end,
 
-    case {is_match(BindingType, RKRules, RK, HKRules, Headers, DTRules), StopOperators} of
+    case {is_match(BindingType, RKRules, RK, HKRules, MsgProps#'P_basic'.headers, DTRules), StopOperators} of
         {true,{1,_}}  -> ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,MsgAQT,MsgAET,MsgAQRT,MsgAQNRT,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult,MsgDQT,MsgDET,MsgDQRT,MsgDQNRT]));
         {false,{_,1}} -> ordsets:subtract(ordsets:union([DAF,DAFREsult,DAFNREsult,MsgAQF,MsgAEF,MsgAQRF,MsgAQNRF,ResDests]), ordsets:union([DDF,DDFREsult,DDFNREsult,MsgDQF,MsgDEF,MsgDQRF,MsgDQNRF]));
         {true,_}      -> get_routes(Data, T, GOT, ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,MsgAQT,MsgAET,MsgAQRT,MsgAQNRT,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult,MsgDQT,MsgDET,MsgDQRT,MsgDQNRT])));
@@ -831,7 +832,7 @@ is_match_rk_any([ _ | Tail], RK) ->
 is_match_hkv_all([], _) -> true;
 
 % Purge nx op on no data as all these are true
-is_match_hkv_all([{_, nx} | BNext], []) ->
+is_match_hkv_all([{_, nx, _} | BNext], []) ->
     is_match_hkv_all(BNext, []);
 
 % No more message header but still match operator to check other than nx; return false
@@ -841,7 +842,7 @@ is_match_hkv_all(_, []) -> false;
 is_match_hkv_all(BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
     when BK > HK -> is_match_hkv_all(BCur, HNext);
 % Current binding key must not exist in data, go next binding
-is_match_hkv_all([{BK, nx} | BNext], HCur = [{HK, _, _} | _])
+is_match_hkv_all([{BK, nx, _} | BNext], HCur = [{HK, _, _} | _])
     when BK < HK -> is_match_hkv_all(BNext, HCur);
 % Current match operator does not exist in message; return false
 is_match_hkv_all([{BK, _, _} | _], [{HK, _, _} | _])
@@ -855,9 +856,9 @@ is_match_hkv_all([{_, eq, BV} | BNext], [{_, _, HV} | HNext])
 % Current values must match but do not match; return false
 is_match_hkv_all([{_, eq, _} | _], _) -> false;
 % Key must not exist, return false
-is_match_hkv_all([{_, nx} | _], _) -> false;
+is_match_hkv_all([{_, nx, _} | _], _) -> false;
 % Current header key must exist; ok go next
-is_match_hkv_all([{_, ex} | BNext], [ _ | HNext]) ->
+is_match_hkv_all([{_, ex, _} | BNext], [ _ | HNext]) ->
     is_match_hkv_all(BNext, HNext);
 
 % HK type checking
@@ -922,14 +923,14 @@ is_match_hkv_all([{_, nre, _} | _], _) -> false.
 % No more match operator to check; return false
 is_match_hkv_any([], _) -> false;
 % Yet some nx op without data; return true
-is_match_hkv_any([{_, nx} | _], []) -> true;
+is_match_hkv_any([{_, nx, _} | _], []) -> true;
 % No more message header but still match operator to check; return false
 is_match_hkv_any(_, []) -> false;
 % Current header key not in match operators; go next header with current match operator
 is_match_hkv_any(BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
     when BK > HK -> is_match_hkv_any(BCur, HNext);
 % Current binding key must not exist in data, return true
-is_match_hkv_any([{BK, nx} | _], [{HK, _, _} | _])
+is_match_hkv_any([{BK, nx, _} | _], [{HK, _, _} | _])
     when BK < HK -> true;
 % Current binding key does not exist in message; go next binding
 is_match_hkv_any([{BK, _, _} | BNext], HCur = [{HK, _, _} | _])
@@ -940,7 +941,7 @@ is_match_hkv_any([{BK, _, _} | BNext], HCur = [{HK, _, _} | _])
 % Current values must match and do match; return true
 is_match_hkv_any([{_, eq, BV} | _], [{_, _, HV} | _]) when BV == HV -> true;
 % Current header key must exist; return true
-is_match_hkv_any([{_, ex} | _], _) -> true;
+is_match_hkv_any([{_, ex, _} | _], _) -> true;
 
 % HK type checking
 is_match_hkv_any([{_, is, s} | _], [{_, longstr, _} | _]) ->
@@ -1037,7 +1038,7 @@ rebuild_args([ Op | Tail ], Ret, Dest) ->
 
 get_match_hk_ops(BindingArgs) ->
     MatchOperators = get_match_hk_ops(BindingArgs, []),
-    rabbit_misc:sort_field_table(MatchOperators).
+    lists:keysort(1, MatchOperators).
 
 % Get match operators
 % We won't check types again as this has been done during validation..
@@ -1046,10 +1047,10 @@ get_match_hk_ops(BindingArgs) ->
 get_match_hk_ops([], Result) -> Result;
 % Does a key exist ?
 get_match_hk_ops([ {<<"x-?hkex">>, _, K} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, ex} | Res]);
+    get_match_hk_ops (Tail, [ {K, ex, nil} | Res]);
 % Does a key NOT exist ?
 get_match_hk_ops([ {<<"x-?hk!ex">>, _, K} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, nx} | Res]);
+    get_match_hk_ops (Tail, [ {K, nx, nil} | Res]);
 % Does a key exist and its value of type..
 get_match_hk_ops([ {<<"x-?hkis ", K/binary>>, _, <<"string">>} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {K, is, s} | Res]);
@@ -1117,11 +1118,11 @@ get_binding_order(Args, Default) ->
 
 %% Get attributes rules from binding's operators
 %% -----------------------------------------------------------------------------
-get_binding_at_rules([]) ->
-    [];
 get_binding_at_rules(Args) ->
     get_binding_at_rules(Args, []).
 
+get_binding_at_rules([], []) ->
+    nil;
 get_binding_at_rules([], Res) ->
     Res;
 get_binding_at_rules([ {K = <<"x-?at", ?BIN>>, _, V} | Tail ], Res) ->
