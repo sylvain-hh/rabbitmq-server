@@ -568,6 +568,20 @@ validate_operators2([ {<<>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Binding's argument key can't be empty", []}};
 
 % Attributes
+% -------------------------------------
+% exnx
+validate_operators2([ {ArgK, longstr, ArgV} | Tail ]) when
+        (ArgK == <<"x-?atex">> orelse ArgK == <<"x-?at!ex">>) andalso
+        (ArgV == <<"content_type">> orelse ArgV == <<"content_encoding">>
+            orelse ArgV == <<"correlation_id">> orelse ArgV == <<"reply_to">>
+            orelse ArgV == <<"expiration">> orelse ArgV == <<"message_id">>
+            orelse ArgV == <<"type">> orelse  ArgV == <<"user_id">>
+            orelse ArgV == <<"app_id">> orelse  ArgV == <<"cluster_id">>
+            orelse ArgV == <<"delivery_mode">> orelse ArgV == <<"priority">>
+            orelse ArgV == <<"timestamp">>
+        ) ->
+    validate_operators2(Tail);
+% str
 validate_operators2([ {ArgKey = <<"x-?at", ?BIN>>, longstr, _} | Tail ]) ->
     case binary:split(ArgKey, <<" ">>) of
         [AttrOp, AttrName] when (
@@ -582,6 +596,7 @@ validate_operators2([ {ArgKey = <<"x-?at", ?BIN>>, longstr, _} | Tail ]) ->
              ) -> validate_operators2(Tail);
         _ -> {error, {binding_invalid, "Invalid attribute operator", []}}
     end;
+% num
 validate_operators2([ {ArgKey = <<"x-?at", ?BIN>>, _, N} | Tail ]) when is_number(N) ->
     case binary:split(ArgKey, <<" ">>) of
         [AttrOp, AttrName] when (
@@ -799,15 +814,19 @@ is_match_dt_any([ {dtlnre, V} | Tail]) ->
     end.
 
 
+%% Match on properties
+%% -----------------------------------------------------------------------------
 is_match_at(all, Rules, MsgAT) ->
     is_match_at_all(Rules, MsgAT);
 is_match_at(any, Rules, MsgAT) ->
     is_match_at_any(Rules, MsgAT).
 
+% all
+% --------------------------------------
 is_match_at_all([], _) ->
     true;
-is_match_at_all([ {Op, Attr, V} | Tail], MsgProps) ->
-    MsgATV = case Attr of
+is_match_at_all([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
+    MsgATV = case AttrId of
         ct -> MsgProps#'P_basic'.content_type;
         ce -> MsgProps#'P_basic'.content_encoding;
         co -> MsgProps#'P_basic'.correlation_id;
@@ -822,37 +841,101 @@ is_match_at_all([ {Op, Attr, V} | Tail], MsgProps) ->
         pr -> MsgProps#'P_basic'.priority;
         ti -> MsgProps#'P_basic'.timestamp
     end,
-    case Op of
-        eq when MsgATV /= undefined andalso MsgATV == V ->
-            is_match_at_all(Tail, MsgProps);
-        eq -> false;
-        ne when MsgATV /= undefined andalso MsgATV /= V ->
-            is_match_at_all(Tail, MsgProps);
-        ne -> false; 
-        re -> case MsgATV /= undefined andalso re:run(MsgATV, V, [ {capture, none} ]) == match of
-                  true -> is_match_at_all(Tail, MsgProps);
-                  _ -> false
-              end;
-        nre -> case MsgATV /= undefined andalso re:run(MsgATV, V, [ {capture, none} ]) == nomatch of
-                   true -> is_match_at_all(Tail, MsgProps);
-                   _ -> false
-               end;
-        lt when MsgATV /= undefined andalso MsgATV < V ->
-            is_match_at_all(Tail, MsgProps);
-        lt -> false;
-        le when MsgATV /= undefined andalso MsgATV =< V ->
-            is_match_at_all(Tail, MsgProps);
-        le -> false;
-        ge when MsgATV /= undefined andalso MsgATV >= V ->
-            is_match_at_all(Tail, MsgProps);
-        ge -> false;
-        gt when MsgATV /= undefined andalso MsgATV > V ->
-            is_match_at_all(Tail, MsgProps);
-        gt -> false
+    if
+        AttrOp == nx andalso MsgATV == undefined ->
+            is_match_at_all(Tail, MsgProps); 
+        MsgATV /= undefined ->
+            case AttrOp of
+                ex -> is_match_at_all(Tail, MsgProps);
+                nx -> false;
+                eq when MsgATV == V ->
+                    is_match_at_all(Tail, MsgProps);
+                eq -> false;
+                ne when MsgATV /= V ->
+                    is_match_at_all(Tail, MsgProps);
+                ne -> false; 
+                re -> case re:run(MsgATV, V, [ {capture, none} ]) == match of
+                          true -> is_match_at_all(Tail, MsgProps);
+                          _ -> false
+                      end;
+                nre -> case re:run(MsgATV, V, [ {capture, none} ]) == nomatch of
+                           true -> is_match_at_all(Tail, MsgProps);
+                           _ -> false
+                       end;
+                lt when MsgATV < V ->
+                    is_match_at_all(Tail, MsgProps);
+                lt -> false;
+                le when MsgATV =< V ->
+                    is_match_at_all(Tail, MsgProps);
+                le -> false;
+                ge when MsgATV >= V ->
+                    is_match_at_all(Tail, MsgProps);
+                ge -> false;
+                gt when MsgATV > V ->
+                    is_match_at_all(Tail, MsgProps);
+                gt -> false
+            end;
+        true -> 
+            false
     end.
 
-
-is_match_at_any(_, _) -> fuk.
+% any
+% --------------------------------------
+is_match_at_any([], _) ->
+    false;
+is_match_at_any([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
+    MsgATV = case AttrId of
+        ct -> MsgProps#'P_basic'.content_type;
+        ce -> MsgProps#'P_basic'.content_encoding;
+        co -> MsgProps#'P_basic'.correlation_id;
+        re -> MsgProps#'P_basic'.reply_to;
+        ex -> MsgProps#'P_basic'.expiration;
+        me -> MsgProps#'P_basic'.message_id;
+        ty -> MsgProps#'P_basic'.type;
+        us -> MsgProps#'P_basic'.user_id;
+        ap -> MsgProps#'P_basic'.app_id;
+        cl -> MsgProps#'P_basic'.cluster_id;
+        de -> MsgProps#'P_basic'.delivery_mode;
+        pr -> MsgProps#'P_basic'.priority;
+        ti -> MsgProps#'P_basic'.timestamp
+    end,
+    if
+        AttrOp == nx andalso MsgATV == undefined ->
+            true;
+        MsgATV /= undefined ->
+            case AttrOp of
+                ex -> true;
+                nx -> is_match_at_any(Tail, MsgProps);
+                eq when MsgATV == V ->
+                    true;
+                eq -> is_match_at_any(Tail, MsgProps);
+                ne when MsgATV /= V ->
+                    true;
+                ne -> is_match_at_any(Tail, MsgProps);
+                re -> case re:run(MsgATV, V, [ {capture, none} ]) == match of
+                          true -> true;
+                          _ -> is_match_at_any(Tail, MsgProps)
+                      end;
+                nre -> case re:run(MsgATV, V, [ {capture, none} ]) == nomatch of
+                           true -> true;
+                           _ -> is_match_at_any(Tail, MsgProps)
+                       end;
+                lt when MsgATV < V ->
+                    true;
+                lt -> is_match_at_any(Tail, MsgProps);
+                le when MsgATV =< V ->
+                    true;
+                le -> is_match_at_any(Tail, MsgProps);
+                ge when MsgATV >= V ->
+                    true;
+                ge -> is_match_at_any(Tail, MsgProps);
+                gt when MsgATV > V ->
+                    true;
+                gt -> is_match_at_any(Tail, MsgProps)
+            end;
+        true ->
+            is_match_at_any(Tail, MsgProps)
+    end.
 
 
 %
@@ -1206,6 +1289,24 @@ get_binding_order(Args, Default) ->
 
 %% Get attributes rules from binding's operators
 %% -----------------------------------------------------------------------------
+attrName2Id(V) ->
+    case V of
+        <<"content_type">> -> ct;
+        <<"content_encoding">> -> ce;
+        <<"correlation_id">> -> co;
+        <<"reply_to">> -> re;
+        <<"expiration">> -> ex;
+        <<"message_id">> -> me;
+        <<"type">> -> ty;
+        <<"user_id">> -> us;
+        <<"app_id">> -> ap;
+        <<"cluster_id">> -> cl;
+        <<"delivery_mode">> -> de;
+        <<"priority">> -> pr;
+        <<"timestamp">> -> ti
+    end.
+
+
 get_binding_at_rules(Args) ->
     get_binding_at_rules(Args, []).
 
@@ -1213,6 +1314,14 @@ get_binding_at_rules([], []) ->
     nil;
 get_binding_at_rules([], Res) ->
     Res;
+get_binding_at_rules([ {K, _, V} | Tail ], Res) when
+        (K == <<"x-?atex">> orelse K == <<"x-?at!ex">>) ->
+    BindingOp = case K of
+        <<"x-?atex">> -> ex;
+        <<"x-?at!ex">> -> nx
+    end,
+    AttrId = attrName2Id(V),
+    get_binding_at_rules(Tail, [ {BindingOp, AttrId, V} | Res]);
 get_binding_at_rules([ {K = <<"x-?at", ?BIN>>, _, V} | Tail ], Res) ->
     [AttrOp, AttrName] = binary:split(K, <<" ">>),
     BindingOp = case AttrOp of
@@ -1225,25 +1334,14 @@ get_binding_at_rules([ {K = <<"x-?at", ?BIN>>, _, V} | Tail ], Res) ->
         <<"x-?at>=">> -> ge;
         <<"x-?at>">> -> gt
     end,
-    BindingAttr = case AttrName of
-        <<"content_type">> -> ct;
-        <<"content_encoding">> -> ce;
-        <<"correlation_id">> -> co;
-        <<"reply_to">> -> re;
-        <<"expiration">> -> ex;
-        <<"message_id">> -> me;
-        <<"type">> -> ty;
-        <<"user_id">> -> us;
-        <<"app_id">> -> ap;
-        <<"cluster_id">> -> cl
-    end,
-    get_match_rk_ops(Tail, [ {BindingOp, BindingAttr, V} | Res]);
+    AttrId = attrName2Id(AttrName),
+    get_binding_at_rules(Tail, [ {BindingOp, AttrId, V} | Res]);
 get_binding_at_rules([ _ | Tail ], Res) ->
     get_binding_at_rules(Tail, Res).
 
 
-
-% Datetime match ops
+%% Get datetime rules from binding's operators
+%% -----------------------------------------------------------------------------
 get_match_dt_ops([], []) -> nil;
 get_match_dt_ops([], Result) -> Result;
 get_match_dt_ops([{<<"x-?dture">>, _, <<V/binary>>} | T], Res) ->
