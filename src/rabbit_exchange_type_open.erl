@@ -816,17 +816,8 @@ is_match_dt_any([ {dtlnre, V} | Tail]) ->
 
 %% Match on properties
 %% -----------------------------------------------------------------------------
-is_match_at(all, Rules, MsgAT) ->
-    is_match_at_all(Rules, MsgAT);
-is_match_at(any, Rules, MsgAT) ->
-    is_match_at_any(Rules, MsgAT).
-
-% all
-% --------------------------------------
-is_match_at_all([], _) ->
-    true;
-is_match_at_all([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
-    MsgATV = case AttrId of
+get_msg_prop_value(AttrId, MsgProps) ->
+    case AttrId of
         ct -> MsgProps#'P_basic'.content_type;
         ce -> MsgProps#'P_basic'.content_encoding;
         co -> MsgProps#'P_basic'.correlation_id;
@@ -840,10 +831,23 @@ is_match_at_all([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
         de -> MsgProps#'P_basic'.delivery_mode;
         pr -> MsgProps#'P_basic'.priority;
         ti -> MsgProps#'P_basic'.timestamp
-    end,
+    end.
+
+
+is_match_at(all, Rules, MsgAT) ->
+    is_match_at_all(Rules, MsgAT);
+is_match_at(any, Rules, MsgAT) ->
+    is_match_at_any(Rules, MsgAT).
+
+% all
+% --------------------------------------
+is_match_at_all([], _) ->
+    true;
+is_match_at_all([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
+    MsgATV = get_msg_prop_value(AttrId, MsgProps),
     if
         AttrOp == nx andalso MsgATV == undefined ->
-            is_match_at_all(Tail, MsgProps); 
+            is_match_at_all(Tail, MsgProps);
         MsgATV /= undefined ->
             case AttrOp of
                 ex -> is_match_at_all(Tail, MsgProps);
@@ -853,7 +857,7 @@ is_match_at_all([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
                 eq -> false;
                 ne when MsgATV /= V ->
                     is_match_at_all(Tail, MsgProps);
-                ne -> false; 
+                ne -> false;
                 re -> case re:run(MsgATV, V, [ {capture, none} ]) == match of
                           true -> is_match_at_all(Tail, MsgProps);
                           _ -> false
@@ -875,7 +879,7 @@ is_match_at_all([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
                     is_match_at_all(Tail, MsgProps);
                 gt -> false
             end;
-        true -> 
+        true ->
             false
     end.
 
@@ -884,21 +888,7 @@ is_match_at_all([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
 is_match_at_any([], _) ->
     false;
 is_match_at_any([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
-    MsgATV = case AttrId of
-        ct -> MsgProps#'P_basic'.content_type;
-        ce -> MsgProps#'P_basic'.content_encoding;
-        co -> MsgProps#'P_basic'.correlation_id;
-        re -> MsgProps#'P_basic'.reply_to;
-        ex -> MsgProps#'P_basic'.expiration;
-        me -> MsgProps#'P_basic'.message_id;
-        ty -> MsgProps#'P_basic'.type;
-        us -> MsgProps#'P_basic'.user_id;
-        ap -> MsgProps#'P_basic'.app_id;
-        cl -> MsgProps#'P_basic'.cluster_id;
-        de -> MsgProps#'P_basic'.delivery_mode;
-        pr -> MsgProps#'P_basic'.priority;
-        ti -> MsgProps#'P_basic'.timestamp
-    end,
+    MsgATV = get_msg_prop_value(AttrId, MsgProps),
     if
         AttrOp == nx andalso MsgATV == undefined ->
             true;
