@@ -15,8 +15,8 @@
 %%
 
 -module(rabbit_exchange_type_open).
--include("rabbit.hrl").
--include("rabbit_framing.hrl").
+--include("rabbit.hrl").
+--include("rabbit_framing.hrl").
 
 -behaviour(rabbit_exchange_type).
 
@@ -192,6 +192,11 @@ route(#exchange{name = #resource{virtual_host = VHost} = Name},
 
 
 %% -----------------------------------------------------------------------------
+% Optimization for headers only..
+is_match(all, {_, MsgProps}, HKRules, nil, nil, nil) ->
+    is_match_hk_all(HKRules, MsgProps#'P_basic'.headers);
+is_match(any, {_, MsgProps}, HKRules, nil, nil, nil) ->
+    is_match_hk_any(HKRules, MsgProps#'P_basic'.headers);
 is_match(BindingType, {MsgRK, MsgProps}, HKRules, RKRules, nil, nil) ->
     case BindingType of
         all -> is_match_rk(BindingType, RKRules, MsgRK)
@@ -475,26 +480,6 @@ validate_list_type_usage(_, [ {<<"x-?at!re", ?BIN>>, array, _} | _ ], _) ->
 validate_list_type_usage(_, [ {<<"x-?at<", ?BIN>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with < or > operator", []}};
 validate_list_type_usage(_, [ {<<"x-?at>", ?BIN>>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with < or > operator", []}};
-
-% Payload content and size = and !=
-validate_list_type_usage(all, [ {<<"x-?pl=">>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with = operator in binding type 'all'", []}};
-validate_list_type_usage(any, [ {<<"x-?pl!=", ?BIN>>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with != operator in binding type 'any'", []}};
-validate_list_type_usage(all, [ {<<"x-?plsz=">>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with = operator in binding type 'all'", []}};
-validate_list_type_usage(any, [ {<<"x-?plsz!=", ?BIN>>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with != operator in binding type 'any'", []}};
-% Payload content REGEX
-validate_list_type_usage(_, [ {<<"x-?plre">>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with regular expression", []}};
-validate_list_type_usage(_, [ {<<"x-?pl!re">>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with regular expression", []}};
-% Payload size < >
-validate_list_type_usage(_, [ {<<"x-?plsz<", ?BIN>>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with < or > operator", []}};
-validate_list_type_usage(_, [ {<<"x-?plsz>", ?BIN>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with < or > operator", []}};
 
 % Routing Key = and !=
@@ -1255,6 +1240,8 @@ get_match_hk_ops([ {K, _, V} | T ], Res) ->
 
 
 % Get match operators related to routing key
+get_match_rk_ops([], []) -> nil;
+
 get_match_rk_ops([], Result) -> Result;
 
 get_match_rk_ops([ {<<"x-?rk=">>, _, <<V/binary>>} | Tail ], Res) ->
@@ -1523,6 +1510,7 @@ remove_bindings(_, _, _) ->
     ok.
 
 remove_bindings_ids(_, [], Res) -> Res;
+% TODO : use element(tuple_size(Binding), Binding) to use one declaration only
 remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,_,_,BId} | T], Res) ->
     case lists:member(BId, BindingIdsToDelete) of
         true -> remove_bindings_ids(BindingIdsToDelete, T, Res);
