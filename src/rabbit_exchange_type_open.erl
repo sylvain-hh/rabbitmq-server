@@ -15,8 +15,8 @@
 %%
 
 -module(rabbit_exchange_type_open).
---include("rabbit.hrl").
---include("rabbit_framing.hrl").
+-include("rabbit.hrl").
+-include("rabbit_framing.hrl").
 
 -behaviour(rabbit_exchange_type).
 
