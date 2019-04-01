@@ -1475,16 +1475,16 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
 % Let's doing that heavy lookup one time only
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
 
-% Branching operators and "super user"
+% Branching operators and "super user" (goto and stop cannot be declared in same binding)
     BindingOrder = get_binding_order(BindingArgs, 10000),
     {GOT, GOF} = get_goto_operators(BindingArgs, {0, 0}),
     {SOT, SOF} = get_stop_operators(BindingArgs, {0, 0}),
-    {GOT2, SOT2} = case SOT of
-        1 andalso is_super_user() -> {GOT, 1};
+    {GOT2, SOT2} = case (is_super_user() orelse SOT==0) of
+        true -> {GOT, SOT};
         _ -> {1000000, 0}
     end,
-    {GOF2, SOF2} = case SOF of
-        1 andalso is_super_user() -> {GOF, 1};
+    {GOF2, SOF2} = case (is_super_user() orelse SOF==0) of
+        true -> {GOF, SOF};
         _ -> {1000000, 0}
     end,
     StopOperators = {SOT2, SOF2},
