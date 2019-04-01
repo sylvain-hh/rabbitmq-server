@@ -187,6 +187,7 @@ route(#exchange{name = #resource{virtual_host = VHost} = Name},
         [] -> [];
         [#?RECORD{?RECVALUE = Bs}] -> Bs
     end,
+% TODO : Change goto 0 to 1, also in other get_routes..
     get_routes({RK, MsgProperties}, CurrentOrderedBindings, 0, ordsets:new()).
 
 
@@ -679,16 +680,18 @@ validate_operators2([ {<<"x-order">>, _, _} | _ ]) ->
     {error, {binding_invalid, "Binding's order must be an integer between 1000 and 1000000", []}};
 
 % Gotos
-validate_operators2([ {<<"x-goto-ontrue">>, _, V} | Tail ]) when is_integer(V), V > 999, V < 1000001 -> validate_operators2(Tail);
-validate_operators2([ {<<"x-goto-ontrue">>, _, _} | _ ]) ->
-    {error, {binding_invalid, "Binding's goto must be an integer between 1000 and 1000000", []}};
-validate_operators2([ {<<"x-goto-onfalse">>, _, V} | Tail ]) when is_integer(V), V > 999, V < 1000001 -> validate_operators2(Tail);
-validate_operators2([ {<<"x-goto-onfalse">>, _, _} | _ ]) ->
-    {error, {binding_invalid, "Binding's goto must be an integer between 1000 and 1000000", []}};
+validate_operators2([ {<<"x-goto-on", BoolBin/binary>>, _, V} | Tail ]) when (BoolBin == <<"true">> orelse BoolBin == <<"false">>) andalso is_integer(V) andalso V > 0 ->
+    if
+        is_super_user() -> validate_operators2(Tail);
+        V > 99 andalso V < 1000000 -> validate_operators2(Tail);
+        true -> {error, {binding_invalid, "Binding's goto must be an integer between 100 and 999999", []}}
+   end;
 
 % Stops
-validate_operators2([ {<<"x-stop-ontrue">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-stop-onfalse">>, longstr, <<>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-stop-ontrue">>, longstr, <<>>} | Tail ]) ->
+    validate_operators2(Tail);
+validate_operators2([ {<<"x-stop-onfalse">>, longstr, <<>>} | Tail ]) ->
+    validate_operators2(Tail);
 
 % Operators hkv with < or > must be numeric only.
 validate_operators2([ {<<"x-?hkv<= ", ?ONE_CHAR_AT_LEAST>>, _, V} | Tail ]) when is_number(V) -> validate_operators2(Tail);
@@ -1452,6 +1455,10 @@ flatten_table ([ {K, T, V} | Tail ], Result) ->
         flatten_table (Tail, [ {K, T, V} | Result ]).
 
 
+is_super_user() ->
+    false;
+
+
 validate(_X) -> ok.
 create(_Tx, _X) -> ok.
 
@@ -1467,9 +1474,21 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     BindingId = crypto:hash(md5, term_to_binary(BindingToAdd)),
 % Let's doing that heavy lookup one time only
     BindingType = parse_x_match(rabbit_misc:table_lookup(BindingArgs, <<"x-match">>)),
-    BindingOrder = get_binding_order(BindingArgs, 9000),
+
+% Branching operators and "super user"
+    BindingOrder = get_binding_order(BindingArgs, 10000),
     {GOT, GOF} = get_goto_operators(BindingArgs, {0, 0}),
-    StopOperators = get_stop_operators(BindingArgs, {0, 0}),
+    {SOT, SOF} = get_stop_operators(BindingArgs, {0, 0}),
+    {GOT2, SOT2} = case SOT of
+        1 andalso is_super_user() -> {GOT, 1};
+        _ -> {1000000, 0}
+    end,
+    {GOF2, SOF2} = case SOF of
+        1 andalso is_super_user() -> {GOF, 1};
+        _ -> {1000000, 0}
+    end,
+    StopOperators = {SOT2, SOF2},
+
     << MsgDests:8, MsgDestsRE:8, MsgDestsOpt:8 >> = get_msg_ops(BindingArgs, << 0, 0, 0 >>),
     FlattenedBindindArgs = flatten_table(rebuild_args(BindingArgs, Dest)),
     MatchHKOps = get_match_hk_ops(FlattenedBindindArgs),
@@ -1484,10 +1503,10 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
         [#?RECORD{?RECVALUE = E}] -> E
     end,
     NewBinding1 = {BindingOrder, BindingType, Dest, MatchOps, << MsgDestsOpt:8 >>},
-    NewBinding2 = case {GOT, GOF, StopOperators, Dests, DestsRE, << MsgDests:8, MsgDestsRE:8 >>} of
+    NewBinding2 = case {GOT2, GOF2, StopOperators, Dests, DestsRE, << MsgDests:8, MsgDestsRE:8 >>} of
         {0, 0, {0, 0}, DefaultDests, ?DEFAULT_DESTS_RE, <<0, 0>>} -> NewBinding1;
-        {_, _, _, DefaultDests, ?DEFAULT_DESTS_RE, <<0, 0>>} -> erlang:append_element(NewBinding1, {GOT, GOF, StopOperators});
-        _ -> erlang:append_element(NewBinding1, {GOT, GOF, StopOperators, Dests, DestsRE, << MsgDests:8, MsgDestsRE:8 >>})
+        {_, _, _, DefaultDests, ?DEFAULT_DESTS_RE, <<0, 0>>} -> erlang:append_element(NewBinding1, {GOT2, GOF2, StopOperators});
+        _ -> erlang:append_element(NewBinding1, {GOT2, GOF2, StopOperators, Dests, DestsRE, << MsgDests:8, MsgDestsRE:8 >>})
     end,
     NewBinding = erlang:append_element(NewBinding2, BindingId),
     NewBindings = lists:keysort(1, [NewBinding | CurrentOrderedBindings]),
