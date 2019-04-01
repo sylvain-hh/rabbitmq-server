@@ -181,6 +181,7 @@ route(#exchange{name = #resource{virtual_host = VHost} = Name},
             Table     -> lists:keysort(1, Table)
         end
     },
+
     % MsgProperties#'P_basic'.headers
 
     CurrentOrderedBindings = case ets:lookup(?TABLE, Name) of
@@ -194,27 +195,19 @@ route(#exchange{name = #resource{virtual_host = VHost} = Name},
 
 %% -----------------------------------------------------------------------------
 % Optimization for headers only..
-is_match(all, {_, MsgProps}, HKRules, nil, nil, nil) ->
+is_match(all, {_, MsgProps}, HKRules, [], [], []) ->
     is_match_hk_all(HKRules, MsgProps#'P_basic'.headers);
-is_match(any, {_, MsgProps}, HKRules, nil, nil, nil) ->
+is_match(any, {_, MsgProps}, HKRules, [], [], []) ->
     is_match_hk_any(HKRules, MsgProps#'P_basic'.headers);
-is_match(BindingType, {MsgRK, MsgProps}, HKRules, RKRules, nil, nil) ->
+
+is_match(BindingType, {MsgRK, MsgProps}, HKRules, RKRules, [], []) ->
     case BindingType of
         all -> is_match_rk(BindingType, RKRules, MsgRK)
                andalso is_match_hk(BindingType, HKRules, MsgProps#'P_basic'.headers);
         any -> is_match_rk(BindingType, RKRules, MsgRK)
                orelse is_match_hk(BindingType, HKRules, MsgProps#'P_basic'.headers)
     end;
-is_match(BindingType, {MsgRK, MsgProps}, HKRules, RKRules, nil, DTRules) ->
-    case BindingType of
-        all -> is_match_rk(BindingType, RKRules, MsgRK)
-               andalso is_match_hk(BindingType, HKRules, MsgProps#'P_basic'.headers)
-               andalso is_match_dt(BindingType, DTRules);
-        any -> is_match_rk(BindingType, RKRules, MsgRK)
-               orelse is_match_hk(BindingType, HKRules, MsgProps#'P_basic'.headers)
-               orelse is_match_dt(BindingType, DTRules)
-    end;
-is_match(BindingType, {MsgRK, MsgProps}, HKRules, RKRules, ATRules, nil) ->
+is_match(BindingType, {MsgRK, MsgProps}, HKRules, RKRules, [], ATRules) ->
     case BindingType of
         all -> is_match_rk(BindingType, RKRules, MsgRK)
                andalso is_match_hk(BindingType, HKRules, MsgProps#'P_basic'.headers)
@@ -223,7 +216,7 @@ is_match(BindingType, {MsgRK, MsgProps}, HKRules, RKRules, ATRules, nil) ->
                orelse is_match_hk(BindingType, HKRules, MsgProps#'P_basic'.headers)
                orelse is_match_at(BindingType, ATRules, MsgProps)
     end;
-is_match(BindingType, {MsgRK, MsgProps}, HKRules, RKRules, ATRules, DTRules) ->
+is_match(BindingType, {MsgRK, MsgProps}, HKRules, RKRules, DTRules, ATRules) ->
     case BindingType of
         all -> is_match_rk(BindingType, RKRules, MsgRK)
                andalso is_match_hk(BindingType, HKRules, MsgProps#'P_basic'.headers)
@@ -242,14 +235,14 @@ get_routes(_, [], _, ResDests) ->
     ordsets:to_list(ResDests);
 
 get_routes(MsgData, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules}, << 0 >>, _} | T ], _, ResDests) ->
-    case is_match(BindingType, MsgData, HKRules, RKRules, ATRules, DTRules) of
+    case is_match(BindingType, MsgData, HKRules, RKRules, DTRules, ATRules) of
         true -> get_routes(MsgData, T, 0, ordsets:add_element(Dest, ResDests));
            _ -> get_routes(MsgData, T, 0, ResDests)
     end;
 
 % Simplest like direct's exchange type
 get_routes(MsgData={MsgRK, _}, [ {_, BindingType, _, {HKRules, RKRules, DTRules, ATRules}, << 128 >>, _} | T ], _, ResDests) ->
-    case is_match(BindingType, MsgData, HKRules, RKRules, ATRules, DTRules) of
+    case is_match(BindingType, MsgData, HKRules, RKRules, DTRules, ATRules) of
         true -> get_routes(MsgData, T, 0, ordsets:add_element(rabbit_misc:r(get(xopen_vhost), queue, MsgRK), ResDests));
            _ -> get_routes(MsgData, T, 0, ResDests)
     end;
@@ -264,7 +257,7 @@ get_routes(MsgData = {MsgRK, _}, [ {Order, BindingType, _, MatchOps, << 128 >>, 
     get_routes(MsgData, [{Order, BindingType, NewDest, MatchOps, << 0 >>, Other, BindingId} | T], GotoOrder, ResDests);
 
 get_routes(MsgData, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules}, _, {GOT, GOF, StopOperators}, _} | T ], _, ResDests) ->
-    case {is_match(BindingType, MsgData, HKRules, RKRules, ATRules, DTRules), StopOperators} of
+    case {is_match(BindingType, MsgData, HKRules, RKRules, DTRules, ATRules), StopOperators} of
         {true,{1,_}}  -> ordsets:add_element(Dest, ResDests);
         {false,{_,1}} -> ResDests;
         {true,_}      -> get_routes(MsgData, T, GOT, ordsets:add_element(Dest, ResDests));
@@ -272,7 +265,7 @@ get_routes(MsgData, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules
     end;
 
 get_routes(MsgData, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules}, _, {GOT, GOF, StopOperators, {DAT, DAF, DDT, DDF}, ?DEFAULT_DESTS_RE, <<0, 0>>}, _} | T ], _, ResDests) ->
-    case {is_match(BindingType, MsgData, HKRules, RKRules, ATRules, DTRules), StopOperators} of
+    case {is_match(BindingType, MsgData, HKRules, RKRules, DTRules, ATRules), StopOperators} of
         {true,{1,_}}  -> ordsets:subtract(ordsets:union(DAT, ordsets:add_element(Dest, ResDests)), DDT);
         {false,{_,1}} -> ordsets:subtract(ordsets:union(DAF, ResDests), DDF);
         {true,_}      -> get_routes(MsgData, T, GOT, ordsets:subtract(ordsets:union(DAT, ordsets:add_element(Dest, ResDests)), DDT));
@@ -316,7 +309,7 @@ get_routes(MsgData={_, MsgProps}, [ {_, BindingType, Dest, {HKRules, RKRules, DT
         0 -> ordsets:from_list([]);
         _ -> MDEF
     end,
-    case {is_match(BindingType, MsgData, HKRules, RKRules, ATRules, DTRules), StopOperators} of
+    case {is_match(BindingType, MsgData, HKRules, RKRules, DTRules, ATRules), StopOperators} of
         {true,{1,_}}  -> ordsets:subtract(ordsets:union([DAT, MsgAQT, MsgAET, ordsets:add_element(Dest, ResDests)]), ordsets:union([DDT, MsgDQT, MsgDET]));
         {false,{_,1}} -> ordsets:subtract(ordsets:union([DAF, MsgAQF, MsgAEF, ResDests]), ordsets:union([DDF, MsgDQF, MsgDEF]));
         {true,_}      -> get_routes(MsgData, T, GOT, ordsets:subtract(ordsets:union([DAT, MsgAQT, MsgAET, ordsets:add_element(Dest, ResDests)]), ordsets:union([DDT, MsgDQT, MsgDET])));
@@ -432,7 +425,7 @@ get_routes(MsgData={_, MsgProps}, [ {_, BindingType, Dest, {HKRules, RKRules, DT
         _ -> ordsets:from_list([Q || Q = #resource{name = QueueName, kind=queue} <- ResDests, re:run(QueueName, DDFNRE, [ {capture, none} ]) /= match])
     end,
 
-    case {is_match(BindingType, MsgData, HKRules, RKRules, ATRules, DTRules), StopOperators} of
+    case {is_match(BindingType, MsgData, HKRules, RKRules, DTRules, ATRules), StopOperators} of
         {true,{1,_}}  -> ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,MsgAQT,MsgAET,MsgAQRT,MsgAQNRT,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult,MsgDQT,MsgDET,MsgDQRT,MsgDQNRT]));
         {false,{_,1}} -> ordsets:subtract(ordsets:union([DAF,DAFREsult,DAFNREsult,MsgAQF,MsgAEF,MsgAQRF,MsgAQNRF,ResDests]), ordsets:union([DDF,DDFREsult,DDFNREsult,MsgDQF,MsgDEF,MsgDQRF,MsgDQNRF]));
         {true,_}      -> get_routes(MsgData, T, GOT, ordsets:subtract(ordsets:add_element(Dest, ordsets:union([DAT,DATREsult,DATNREsult,MsgAQT,MsgAET,MsgAQRT,MsgAQNRT,ResDests])), ordsets:union([DDT,DDTREsult,DDTNREsult,MsgDQT,MsgDET,MsgDQRT,MsgDQNRT])));
@@ -824,6 +817,7 @@ get_msg_prop_value(AttrId, MsgProps) ->
         pr -> MsgProps#'P_basic'.priority;
         ti -> MsgProps#'P_basic'.timestamp
     end.
+
 
 
 is_match_at(all, Rules, MsgAT) ->
@@ -1247,8 +1241,6 @@ get_match_hk_ops([ {K, _, V} | T ], Res) ->
 
 
 % Get match operators related to routing key
-get_match_rk_ops([], []) -> nil;
-
 get_match_rk_ops([], Result) -> Result;
 
 get_match_rk_ops([ {<<"x-?rk=">>, _, <<V/binary>>} | Tail ], Res) ->
@@ -1294,8 +1286,6 @@ attrName2Id(V) ->
 get_binding_at_rules(Args) ->
     get_binding_at_rules(Args, []).
 
-get_binding_at_rules([], []) ->
-    nil;
 get_binding_at_rules([], Res) ->
     Res;
 get_binding_at_rules([ {K, _, V} | Tail ], Res) when
@@ -1326,7 +1316,6 @@ get_binding_at_rules([ _ | Tail ], Res) ->
 
 %% Get datetime rules from binding's operators
 %% -----------------------------------------------------------------------------
-get_match_dt_ops([], []) -> nil;
 get_match_dt_ops([], Result) -> Result;
 get_match_dt_ops([{<<"x-?dture">>, _, <<V/binary>>} | T], Res) ->
     get_match_dt_ops(T, [{dture, V} | Res]);
