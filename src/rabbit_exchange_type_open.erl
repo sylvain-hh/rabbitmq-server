@@ -673,16 +673,20 @@ validate_operators2([ {<<"x-msg-delqre-onfalse">>, longstr, <<>>} | Tail ]) ->
 validate_operators2([ {<<"x-msg-destq-rk">>, longstr, <<>>} | Tail ]) ->
     validate_operators2(Tail);
 
-
 % Binding order
-validate_operators2([ {<<"x-order">>, _, V} | Tail ]) when is_integer(V), V > 999, V < 1000001 -> validate_operators2(Tail);
-validate_operators2([ {<<"x-order">>, _, _} | _ ]) ->
-    {error, {binding_invalid, "Binding's order must be an integer between 1000 and 1000000", []}};
+validate_operators2([ {<<"x-order">>, _, V} | Tail ]) when is_integer(V) ->
+    IsSuperUser = is_super_user(),
+    if
+        IsSuperUser -> validate_operators2(Tail);
+        V > 99 andalso V < 1000000 -> validate_operators2(Tail);
+        true -> {error, {binding_invalid, "Binding's order must be an integer between 100 and 999999", []}}
+    end;
 
 % Gotos
-validate_operators2([ {<<"x-goto-on", BoolBin/binary>>, _, V} | Tail ]) when (BoolBin == <<"true">> orelse BoolBin == <<"false">>) andalso is_integer(V) andalso V > 0 ->
+validate_operators2([ {<<"x-goto-on", BoolBin/binary>>, _, V} | Tail ]) when (BoolBin == <<"true">> orelse BoolBin == <<"false">>) andalso is_integer(V) ->
+    IsSuperUser = is_super_user(),
     if
-        is_super_user() -> validate_operators2(Tail);
+        IsSuperUser -> validate_operators2(Tail);
         V > 99 andalso V < 1000000 -> validate_operators2(Tail);
         true -> {error, {binding_invalid, "Binding's goto must be an integer between 100 and 999999", []}}
    end;
@@ -1456,7 +1460,7 @@ flatten_table ([ {K, T, V} | Tail ], Result) ->
 
 
 is_super_user() ->
-    false;
+    false.
 
 
 validate(_X) -> ok.
