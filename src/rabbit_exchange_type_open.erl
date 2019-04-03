@@ -18,6 +18,7 @@
 -include("rabbit.hrl").
 -include("rabbit_framing.hrl").
 
+
 -behaviour(rabbit_exchange_type).
 
 -export([description/0, serialise_events/0, route/2]).
@@ -549,47 +550,75 @@ validate_operators2([ {<<>>, _, _} | _ ]) ->
 % Attributes
 % -------------------------------------
 % exnx
-validate_operators2([ {ArgK, longstr, ArgV} | Tail ]) when
-        (ArgK == <<"x-?atex">> orelse ArgK == <<"x-?at!ex">>) andalso
-        (ArgV == <<"content_type">> orelse ArgV == <<"content_encoding">>
-            orelse ArgV == <<"correlation_id">> orelse ArgV == <<"reply_to">>
-            orelse ArgV == <<"expiration">> orelse ArgV == <<"message_id">>
-            orelse ArgV == <<"type">> orelse  ArgV == <<"user_id">>
-            orelse ArgV == <<"app_id">> orelse  ArgV == <<"cluster_id">>
-            orelse ArgV == <<"delivery_mode">> orelse ArgV == <<"priority">>
-            orelse ArgV == <<"timestamp">>
-        ) ->
-    validate_operators2(Tail);
+validate_operators2([ {ArgKey = <<"x-?atex ", ?BIN>>, longstr, << "" >>} | Tail ]) ->
+    case binary:split(ArgKey, <<" ">>) of
+        [_, AttrName] when (
+            AttrName==<<"content_type">> orelse AttrName==<<"content_encoding">>
+            orelse AttrName==<<"correlation_id">> orelse AttrName==<<"reply_to">>
+            orelse AttrName==<<"message_id">> orelse AttrName==<<"type">>
+            orelse AttrName==<<"user_id">> orelse AttrName==<<"app_id">>
+            orelse AttrName==<<"cluster_id">>
+            orelse AttrName==<<"delivery_mode">> orelse AttrName==<<"priority">>
+            orelse AttrName==<<"timestamp">> orelse AttrName==<<"expiration">>
+            )
+            -> validate_operators2(Tail);
+        _ -> {error, {binding_invalid, "Invalid attribute operator", []}}
+    end;
+validate_operators2([ {ArgKey = <<"x-?at!ex ", ?BIN>>, longstr, << "" >>} | Tail ]) ->
+    case binary:split(ArgKey, <<" ">>) of
+        [_, AttrName] when (
+            AttrName==<<"content_type">> orelse AttrName==<<"content_encoding">>
+            orelse AttrName==<<"correlation_id">> orelse AttrName==<<"reply_to">>
+            orelse AttrName==<<"message_id">> orelse AttrName==<<"type">>
+            orelse AttrName==<<"user_id">> orelse AttrName==<<"app_id">>
+            orelse AttrName==<<"cluster_id">>
+            orelse AttrName==<<"delivery_mode">> orelse AttrName==<<"priority">>
+            orelse AttrName==<<"timestamp">> orelse AttrName==<<"expiration">>
+            )
+            -> validate_operators2(Tail);
+        _ -> {error, {binding_invalid, "Invalid attribute operator", []}}
+    end;
 % str
-validate_operators2([ {ArgKey = <<"x-?at", ?BIN>>, longstr, _} | Tail ]) ->
+validate_operators2([ {ArgKey = <<"x-?at", ?BIN>>, longstr, ArgV} | Tail ]) ->
+    % For 'expiration' prop only..
+    IntArgV = try binary_to_integer(ArgV)
+        catch _:_ -> ko
+        end,
     case binary:split(ArgKey, <<" ">>) of
         [AttrOp, AttrName] when (
-             AttrName==<<"content_type">> orelse AttrName==<<"content_encoding">>
-             orelse AttrName==<<"correlation_id">> orelse AttrName==<<"reply_to">>
-             orelse AttrName==<<"expiration">> orelse AttrName==<<"message_id">>
-             orelse AttrName==<<"type">> orelse  AttrName==<<"user_id">>
-             orelse AttrName==<<"app_id">> orelse  AttrName==<<"cluster_id">>
-             ) andalso (
-             AttrOp==<<"x-?at=">> orelse AttrOp==<<"x-?at!=">>
-             orelse AttrOp==<<"x-?atre">> orelse AttrOp==<<"x-?at!re">>
-             ) -> validate_operators2(Tail);
+            AttrName==<<"content_type">> orelse AttrName==<<"content_encoding">>
+            orelse AttrName==<<"correlation_id">> orelse AttrName==<<"reply_to">>
+            orelse AttrName==<<"message_id">> orelse AttrName==<<"type">>
+            orelse AttrName==<<"user_id">> orelse AttrName==<<"app_id">>
+            orelse AttrName==<<"cluster_id">>
+            ) andalso (
+            AttrOp==<<"x-?at=">> orelse AttrOp==<<"x-?at!=">>
+            orelse AttrOp==<<"x-?atre">> orelse AttrOp==<<"x-?at!re">>
+            ) -> validate_operators2(Tail);
+    % 'expiration' value is an integer (milliseconds) but typed "in" a string... ouch !
+    % During binding add, this prop will be internally treated as a real integer :)
+        [AttrOp, AttrName] when is_integer(IntArgV) andalso AttrName==<<"expiration">>
+            andalso (
+            AttrOp==<<"x-?at=">> orelse AttrOp==<<"x-?at!=">>
+            orelse AttrOp==<<"x-?at<">> orelse AttrOp==<<"x-?at<=">>
+            orelse AttrOp==<<"x-?at>=">> orelse AttrOp==<<"x-?at>">>
+            ) ->  validate_operators2(Tail);
         _ -> {error, {binding_invalid, "Invalid attribute operator", []}}
     end;
 % num
-validate_operators2([ {ArgKey = <<"x-?at", ?BIN>>, _, N} | Tail ]) when is_number(N) ->
+validate_operators2([ {ArgKey = <<"x-?at", ?BIN>>, _, N} | Tail ]) when is_integer(N) ->
+    % so, we allow 'expiration' to be set as an integer too
     case binary:split(ArgKey, <<" ">>) of
         [AttrOp, AttrName] when (
-             AttrName==<<"delivery_mode">> orelse AttrName==<<"priority">>
-             orelse AttrName==<<"timestamp">>
-             ) andalso (
-             AttrOp==<<"x-?at=">> orelse AttrOp==<<"x-?at!=">>
-             orelse AttrOp==<<"x-?at<">> orelse AttrOp==<<"x-?at<=">>
-             orelse AttrOp==<<"x-?at>=">> orelse AttrOp==<<"x-?at>">>
-             ) -> validate_operators2(Tail);
+            AttrName==<<"delivery_mode">> orelse AttrName==<<"priority">>
+            orelse AttrName==<<"timestamp">> orelse AttrName==<<"expiration">>
+            ) andalso (
+            AttrOp==<<"x-?at=">> orelse AttrOp==<<"x-?at!=">>
+            orelse AttrOp==<<"x-?at<">> orelse AttrOp==<<"x-?at<=">>
+            orelse AttrOp==<<"x-?at>=">> orelse AttrOp==<<"x-?at>">>
+            ) -> validate_operators2(Tail);
         _ -> {error, {binding_invalid, "Invalid attribute operator", []}}
     end;
-validate_operators2([ {<<"x-?at", ?BIN>>, _, _} | _ ]) ->
-    {error, {binding_invalid, "Invalid attribute operator", []}};
 
 % Datettime match ops
 validate_operators2([ {<<"x-?dture">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
@@ -803,11 +832,13 @@ is_match_dt_any([ {dtlnre, V} | Tail]) ->
 %% -----------------------------------------------------------------------------
 get_msg_prop_value(AttrId, MsgProps) ->
     case AttrId of
+        ex -> try binary_to_integer(MsgProps#'P_basic'.expiration)
+            catch _:_ -> MsgProps#'P_basic'.expiration
+            end;
         ct -> MsgProps#'P_basic'.content_type;
         ce -> MsgProps#'P_basic'.content_encoding;
         co -> MsgProps#'P_basic'.correlation_id;
         re -> MsgProps#'P_basic'.reply_to;
-        ex -> MsgProps#'P_basic'.expiration;
         me -> MsgProps#'P_basic'.message_id;
         ty -> MsgProps#'P_basic'.type;
         us -> MsgProps#'P_basic'.user_id;
@@ -1288,15 +1319,16 @@ get_binding_at_rules(Args) ->
 
 get_binding_at_rules([], Res) ->
     Res;
-get_binding_at_rules([ {K, _, V} | Tail ], Res) when
-        (K == <<"x-?atex">> orelse K == <<"x-?at!ex">>) ->
-    BindingOp = case K of
-        <<"x-?atex">> -> ex;
-        <<"x-?at!ex">> -> nx
-    end,
-    AttrId = attrName2Id(V),
-    get_binding_at_rules(Tail, [ {BindingOp, AttrId, V} | Res]);
-get_binding_at_rules([ {K = <<"x-?at", ?BIN>>, _, V} | Tail ], Res) ->
+% exnx
+get_binding_at_rules([ {K = <<"x-?atex ", ?BIN>>, longstr, << "" >>} | Tail ], Res) ->
+    [_, AttrName] = binary:split(K, <<" ">>),
+    AttrId = attrName2Id(AttrName),
+    get_binding_at_rules(Tail, [ {ex, AttrId, 0} | Res]);
+get_binding_at_rules([ {K = <<"x-?at!ex ", ?BIN>>, longstr, << "" >>} | Tail ], Res) ->
+    [_, AttrName] = binary:split(K, <<" ">>),
+    AttrId = attrName2Id(AttrName),
+    get_binding_at_rules(Tail, [ {nx, AttrId, 0} | Res]);
+get_binding_at_rules([ {K = <<"x-?at", ?BIN>>, T, V} | Tail ], Res) ->
     [AttrOp, AttrName] = binary:split(K, <<" ">>),
     BindingOp = case AttrOp of
         <<"x-?at=">> -> eq;
@@ -1309,7 +1341,11 @@ get_binding_at_rules([ {K = <<"x-?at", ?BIN>>, _, V} | Tail ], Res) ->
         <<"x-?at>">> -> gt
     end,
     AttrId = attrName2Id(AttrName),
-    get_binding_at_rules(Tail, [ {BindingOp, AttrId, V} | Res]);
+    % Special case for 'expiration' prop..
+    case AttrId == ex andalso T == longstr of
+        true -> get_binding_at_rules(Tail, [ {BindingOp, AttrId, binary_to_integer(V)} | Res]);
+        _    -> get_binding_at_rules(Tail, [ {BindingOp, AttrId, V} | Res])
+    end;
 get_binding_at_rules([ _ | Tail ], Res) ->
     get_binding_at_rules(Tail, Res).
 
@@ -1450,6 +1486,7 @@ flatten_table ([ {K, T, V} | Tail ], Result) ->
 
 is_super_user() ->
     false.
+
 
 
 validate(_X) -> ok.
