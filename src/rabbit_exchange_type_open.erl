@@ -212,20 +212,20 @@ is_match(BindingType, {MsgRK, MsgProps}, HKRules, RKRules, [], ATRules) ->
     case BindingType of
         all -> is_match_rk(BindingType, RKRules, MsgRK)
                andalso is_match_hk(BindingType, HKRules, MsgProps#'P_basic'.headers)
-               andalso is_match_at(BindingType, ATRules, MsgProps);
+               andalso is_match_pr(BindingType, ATRules, MsgProps);
         any -> is_match_rk(BindingType, RKRules, MsgRK)
                orelse is_match_hk(BindingType, HKRules, MsgProps#'P_basic'.headers)
-               orelse is_match_at(BindingType, ATRules, MsgProps)
+               orelse is_match_pr(BindingType, ATRules, MsgProps)
     end;
 is_match(BindingType, {MsgRK, MsgProps}, HKRules, RKRules, DTRules, ATRules) ->
     case BindingType of
         all -> is_match_rk(BindingType, RKRules, MsgRK)
                andalso is_match_hk(BindingType, HKRules, MsgProps#'P_basic'.headers)
-               andalso is_match_at(BindingType, ATRules, MsgProps)
+               andalso is_match_pr(BindingType, ATRules, MsgProps)
                andalso is_match_dt(BindingType, DTRules);
         any -> is_match_rk(BindingType, RKRules, MsgRK)
                orelse is_match_hk(BindingType, HKRules, MsgProps#'P_basic'.headers)
-               orelse is_match_at(BindingType, ATRules, MsgProps)
+               orelse is_match_pr(BindingType, ATRules, MsgProps)
                orelse is_match_dt(BindingType, DTRules)
     end.
 
@@ -462,19 +462,19 @@ validate_list_type_usage(BindingType, Args) ->
 validate_list_type_usage(_, [], Args) ->
     validate_no_deep_lists(Args);
 % Attributes = and !=
-validate_list_type_usage(all, [ {<<"x-?at=", ?BIN>>, array, _} | _ ], _) ->
+validate_list_type_usage(all, [ {<<"x-?pr=", ?BIN>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with = operator in binding type 'all'", []}};
-validate_list_type_usage(any, [ {<<"x-?at!=", ?BIN>>, array, _} | _ ], _) ->
+validate_list_type_usage(any, [ {<<"x-?pr!=", ?BIN>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with != operator in binding type 'any'", []}};
 % Attributes REGEX
-validate_list_type_usage(_, [ {<<"x-?atre", ?BIN>>, array, _} | _ ], _) ->
+validate_list_type_usage(_, [ {<<"x-?prre", ?BIN>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with regular expression", []}};
-validate_list_type_usage(_, [ {<<"x-?at!re", ?BIN>>, array, _} | _ ], _) ->
+validate_list_type_usage(_, [ {<<"x-?pr!re", ?BIN>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with regular expression", []}};
 % Attributes < >
-validate_list_type_usage(_, [ {<<"x-?at<", ?BIN>>, array, _} | _ ], _) ->
+validate_list_type_usage(_, [ {<<"x-?pr<", ?BIN>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with < or > operator", []}};
-validate_list_type_usage(_, [ {<<"x-?at>", ?BIN>>, array, _} | _ ], _) ->
+validate_list_type_usage(_, [ {<<"x-?pr>", ?BIN>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with < or > operator", []}};
 
 % Routing Key = and !=
@@ -551,7 +551,7 @@ validate_operators2([ {<<>>, _, _} | _ ]) ->
 % -------------------------------------
 % exnx
 validate_operators2([ {ArgK, longstr, ArgV} | Tail ]) when
-        (ArgK == <<"x-?atex">> orelse ArgK == <<"x-?at!ex">>) andalso
+        (ArgK == <<"x-?prex">> orelse ArgK == <<"x-?pr!ex">>) andalso
         (ArgV == <<"content_type">> orelse ArgV == <<"content_encoding">>
             orelse ArgV == <<"correlation_id">> orelse ArgV == <<"reply_to">>
             orelse ArgV == <<"expiration">> orelse ArgV == <<"message_id">>
@@ -562,7 +562,7 @@ validate_operators2([ {ArgK, longstr, ArgV} | Tail ]) when
         ) ->
     validate_operators2(Tail);
 % str
-validate_operators2([ {ArgKey = <<"x-?at", ?BIN>>, longstr, ArgV} | Tail ]) ->
+validate_operators2([ {ArgKey = <<"x-?pr", ?BIN>>, longstr, ArgV} | Tail ]) ->
     % For 'expiration' prop only..
     IntArgV = try binary_to_integer(ArgV)
         catch _:_ -> ko
@@ -575,32 +575,32 @@ validate_operators2([ {ArgKey = <<"x-?at", ?BIN>>, longstr, ArgV} | Tail ]) ->
              orelse AttrName==<<"user_id">> orelse AttrName==<<"app_id">>
              orelse AttrName==<<"cluster_id">>
              ) andalso (
-             AttrOp==<<"x-?at=">> orelse AttrOp==<<"x-?at!=">>
-             orelse AttrOp==<<"x-?atre">> orelse AttrOp==<<"x-?at!re">>
+             AttrOp==<<"x-?pr=">> orelse AttrOp==<<"x-?pr!=">>
+             orelse AttrOp==<<"x-?prre">> orelse AttrOp==<<"x-?pr!re">>
              ) -> validate_operators2(Tail);
     % 'expiration' value is an integer (milliseconds) but typed "in" a string... ouch !
     % During binding add, this prop will be internally treated as a real integer :)
         [AttrOp, AttrName] when is_integer(IntArgV) andalso AttrName==<<"expiration">>
              andalso (
-             AttrOp==<<"x-?at=">> orelse AttrOp==<<"x-?at!=">>
-             orelse AttrOp==<<"x-?at<">> orelse AttrOp==<<"x-?at<=">>
-             orelse AttrOp==<<"x-?at>=">> orelse AttrOp==<<"x-?at>">>
+             AttrOp==<<"x-?pr=">> orelse AttrOp==<<"x-?pr!=">>
+             orelse AttrOp==<<"x-?pr<">> orelse AttrOp==<<"x-?pr<=">>
+             orelse AttrOp==<<"x-?pr>=">> orelse AttrOp==<<"x-?pr>">>
              ) ->  validate_operators2(Tail);
-        _ -> {error, {binding_invalid, "Invalid attribute operator", []}}
+        _ -> {error, {binding_invalid, "Invalid property match operator", []}}
     end;
 % num
-validate_operators2([ {ArgKey = <<"x-?at", ?BIN>>, _, N} | Tail ]) when is_integer(N) ->
+validate_operators2([ {ArgKey = <<"x-?pr", ?BIN>>, _, N} | Tail ]) when is_integer(N) ->
     % so, we allow 'expiration' to be set as an integer too
     case binary:split(ArgKey, <<" ">>) of
         [AttrOp, AttrName] when (
              AttrName==<<"delivery_mode">> orelse AttrName==<<"priority">>
              orelse AttrName==<<"timestamp">> orelse AttrName==<<"expiration">>
              ) andalso (
-             AttrOp==<<"x-?at=">> orelse AttrOp==<<"x-?at!=">>
-             orelse AttrOp==<<"x-?at<">> orelse AttrOp==<<"x-?at<=">>
-             orelse AttrOp==<<"x-?at>=">> orelse AttrOp==<<"x-?at>">>
+             AttrOp==<<"x-?pr=">> orelse AttrOp==<<"x-?pr!=">>
+             orelse AttrOp==<<"x-?pr<">> orelse AttrOp==<<"x-?pr<=">>
+             orelse AttrOp==<<"x-?pr>=">> orelse AttrOp==<<"x-?pr>">>
              ) -> validate_operators2(Tail);
-        _ -> {error, {binding_invalid, "Invalid attribute operator", []}}
+        _ -> {error, {binding_invalid, "Invalid property match operator", []}}
     end;
 
 % Datettime match ops
@@ -834,49 +834,49 @@ get_msg_prop_value(AttrId, MsgProps) ->
 
 
 
-is_match_at(all, Rules, MsgAT) ->
-    is_match_at_all(Rules, MsgAT);
-is_match_at(any, Rules, MsgAT) ->
-    is_match_at_any(Rules, MsgAT).
+is_match_pr(all, Rules, MsgAT) ->
+    is_match_pr_all(Rules, MsgAT);
+is_match_pr(any, Rules, MsgAT) ->
+    is_match_pr_any(Rules, MsgAT).
 
 % all
 % --------------------------------------
-is_match_at_all([], _) ->
+is_match_pr_all([], _) ->
     true;
-is_match_at_all([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
+is_match_pr_all([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
     MsgATV = get_msg_prop_value(AttrId, MsgProps),
     if
         AttrOp == nx andalso MsgATV == undefined ->
-            is_match_at_all(Tail, MsgProps);
+            is_match_pr_all(Tail, MsgProps);
         MsgATV /= undefined ->
             case AttrOp of
-                ex -> is_match_at_all(Tail, MsgProps);
+                ex -> is_match_pr_all(Tail, MsgProps);
                 nx -> false;
                 eq when MsgATV == V ->
-                    is_match_at_all(Tail, MsgProps);
+                    is_match_pr_all(Tail, MsgProps);
                 eq -> false;
                 ne when MsgATV /= V ->
-                    is_match_at_all(Tail, MsgProps);
+                    is_match_pr_all(Tail, MsgProps);
                 ne -> false;
                 re -> case re:run(MsgATV, V, [ {capture, none} ]) == match of
-                          true -> is_match_at_all(Tail, MsgProps);
+                          true -> is_match_pr_all(Tail, MsgProps);
                           _ -> false
                       end;
                 nre -> case re:run(MsgATV, V, [ {capture, none} ]) == nomatch of
-                           true -> is_match_at_all(Tail, MsgProps);
+                           true -> is_match_pr_all(Tail, MsgProps);
                            _ -> false
                        end;
                 lt when MsgATV < V ->
-                    is_match_at_all(Tail, MsgProps);
+                    is_match_pr_all(Tail, MsgProps);
                 lt -> false;
                 le when MsgATV =< V ->
-                    is_match_at_all(Tail, MsgProps);
+                    is_match_pr_all(Tail, MsgProps);
                 le -> false;
                 ge when MsgATV >= V ->
-                    is_match_at_all(Tail, MsgProps);
+                    is_match_pr_all(Tail, MsgProps);
                 ge -> false;
                 gt when MsgATV > V ->
-                    is_match_at_all(Tail, MsgProps);
+                    is_match_pr_all(Tail, MsgProps);
                 gt -> false
             end;
         true ->
@@ -885,9 +885,9 @@ is_match_at_all([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
 
 % any
 % --------------------------------------
-is_match_at_any([], _) ->
+is_match_pr_any([], _) ->
     false;
-is_match_at_any([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
+is_match_pr_any([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
     MsgATV = get_msg_prop_value(AttrId, MsgProps),
     if
         AttrOp == nx andalso MsgATV == undefined ->
@@ -895,36 +895,36 @@ is_match_at_any([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
         MsgATV /= undefined ->
             case AttrOp of
                 ex -> true;
-                nx -> is_match_at_any(Tail, MsgProps);
+                nx -> is_match_pr_any(Tail, MsgProps);
                 eq when MsgATV == V ->
                     true;
-                eq -> is_match_at_any(Tail, MsgProps);
+                eq -> is_match_pr_any(Tail, MsgProps);
                 ne when MsgATV /= V ->
                     true;
-                ne -> is_match_at_any(Tail, MsgProps);
+                ne -> is_match_pr_any(Tail, MsgProps);
                 re -> case re:run(MsgATV, V, [ {capture, none} ]) == match of
                           true -> true;
-                          _ -> is_match_at_any(Tail, MsgProps)
+                          _ -> is_match_pr_any(Tail, MsgProps)
                       end;
                 nre -> case re:run(MsgATV, V, [ {capture, none} ]) == nomatch of
                            true -> true;
-                           _ -> is_match_at_any(Tail, MsgProps)
+                           _ -> is_match_pr_any(Tail, MsgProps)
                        end;
                 lt when MsgATV < V ->
                     true;
-                lt -> is_match_at_any(Tail, MsgProps);
+                lt -> is_match_pr_any(Tail, MsgProps);
                 le when MsgATV =< V ->
                     true;
-                le -> is_match_at_any(Tail, MsgProps);
+                le -> is_match_pr_any(Tail, MsgProps);
                 ge when MsgATV >= V ->
                     true;
-                ge -> is_match_at_any(Tail, MsgProps);
+                ge -> is_match_pr_any(Tail, MsgProps);
                 gt when MsgATV > V ->
                     true;
-                gt -> is_match_at_any(Tail, MsgProps)
+                gt -> is_match_pr_any(Tail, MsgProps)
             end;
         true ->
-            is_match_at_any(Tail, MsgProps)
+            is_match_pr_any(Tail, MsgProps)
     end.
 
 
@@ -1277,7 +1277,7 @@ get_binding_order(Args, Default) ->
     end.
 
 
-%% Get attributes rules from binding's operators
+%% Get rules on properties from binding's operators
 %% -----------------------------------------------------------------------------
 attrName2Id(V) ->
     case V of
@@ -1297,39 +1297,39 @@ attrName2Id(V) ->
     end.
 
 
-get_binding_at_rules(Args) ->
-    get_binding_at_rules(Args, []).
+get_binding_pr_rules(Args) ->
+    get_binding_pr_rules(Args, []).
 
-get_binding_at_rules([], Res) ->
+get_binding_pr_rules([], Res) ->
     Res;
-get_binding_at_rules([ {K, _, V} | Tail ], Res) when
-        (K == <<"x-?atex">> orelse K == <<"x-?at!ex">>) ->
+get_binding_pr_rules([ {K, _, V} | Tail ], Res) when
+        (K == <<"x-?prex">> orelse K == <<"x-?pr!ex">>) ->
     BindingOp = case K of
-        <<"x-?atex">> -> ex;
-        <<"x-?at!ex">> -> nx
+        <<"x-?prex">> -> ex;
+        <<"x-?pr!ex">> -> nx
     end,
     AttrId = attrName2Id(V),
-    get_binding_at_rules(Tail, [ {BindingOp, AttrId, V} | Res]);
-get_binding_at_rules([ {K = <<"x-?at", ?BIN>>, T, V} | Tail ], Res) ->
+    get_binding_pr_rules(Tail, [ {BindingOp, AttrId, V} | Res]);
+get_binding_pr_rules([ {K = <<"x-?pr", ?BIN>>, T, V} | Tail ], Res) ->
     [AttrOp, AttrName] = binary:split(K, <<" ">>),
     BindingOp = case AttrOp of
-        <<"x-?at=">> -> eq;
-        <<"x-?at!=">> -> ne;
-        <<"x-?atre">> -> re;
-        <<"x-?at!re">> -> nre;
-        <<"x-?at<">> -> lt;
-        <<"x-?at<=">> -> le;
-        <<"x-?at>=">> -> ge;
-        <<"x-?at>">> -> gt
+        <<"x-?pr=">> -> eq;
+        <<"x-?pr!=">> -> ne;
+        <<"x-?prre">> -> re;
+        <<"x-?pr!re">> -> nre;
+        <<"x-?pr<">> -> lt;
+        <<"x-?pr<=">> -> le;
+        <<"x-?pr>=">> -> ge;
+        <<"x-?pr>">> -> gt
     end,
     AttrId = attrName2Id(AttrName),
     % Special case for 'expiration' prop..
     case AttrId == ex andalso T == longstr of
-        true -> get_binding_at_rules(Tail, [ {BindingOp, AttrId, binary_to_integer(V)} | Res]);
-        _    -> get_binding_at_rules(Tail, [ {BindingOp, AttrId, V} | Res])
+        true -> get_binding_pr_rules(Tail, [ {BindingOp, AttrId, binary_to_integer(V)} | Res]);
+        _    -> get_binding_pr_rules(Tail, [ {BindingOp, AttrId, V} | Res])
     end;
-get_binding_at_rules([ _ | Tail ], Res) ->
-    get_binding_at_rules(Tail, Res).
+get_binding_pr_rules([ _ | Tail ], Res) ->
+    get_binding_pr_rules(Tail, Res).
 
 
 %% Get datetime rules from binding's operators
@@ -1506,7 +1506,7 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     MatchHKOps = get_match_hk_ops(FlattenedBindindArgs),
     MatchRKOps = get_match_rk_ops(FlattenedBindindArgs, []),
     MatchDTOps = get_match_dt_ops(FlattenedBindindArgs, []),
-    MatchATOps = get_binding_at_rules(FlattenedBindindArgs),
+    MatchATOps = get_binding_pr_rules(FlattenedBindindArgs),
     MatchOps = {MatchHKOps, MatchRKOps, MatchDTOps, MatchATOps},
     DefaultDests = {ordsets:new(), ordsets:new(), ordsets:new(), ordsets:new()},
     {Dests, DestsRE} = get_dests_operators(VHost, FlattenedBindindArgs, DefaultDests, ?DEFAULT_DESTS_RE),
