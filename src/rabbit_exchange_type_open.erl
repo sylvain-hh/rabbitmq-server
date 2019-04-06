@@ -79,13 +79,13 @@ save_datetimes() ->
     {YMD={Y,Mo,D},{H,Mi,S}} = calendar:now_to_local_time(TS),
     {_,W} = calendar:iso_week_number(YMD),
     Dw = calendar:day_of_the_week(YMD),
-    DateAsString = lists:flatten(io_lib:format("~4..0w~2..0w~2..0w ~2..0w ~w ~2..0w~2..0w~2..0w", [Y,Mo, D, W, Dw, H, Mi, S])),
+    DateAsString = lists:flatten(io_lib:format("~B~2..0B~2..0B ~2..0B~2..0B~2..0B ~B ~2..0B", [Y,Mo, D, H, Mi, S, Dw, W])),
     put(xopen_dtl, DateAsString),
 % Universal date time taken from before
     {UYMD={UY,UMo,UD},{UH,UMi,US}} = calendar:now_to_universal_time(TS),
     {_,UW} = calendar:iso_week_number(UYMD),
     UDw = calendar:day_of_the_week(UYMD),
-    UDateAsString = lists:flatten(io_lib:format("~4..0w~2..0w~2..0w ~2..0w ~w ~2..0w~2..0w~2..0w", [UY,UMo, UD, UW, UDw, UH, UMi, US])),
+    UDateAsString = lists:flatten(io_lib:format("~B~2..0B~2..0B ~2..0B~2..0B~2..0B ~B ~2..0B", [UY,UMo, UD, UH, UMi, US, UDw, UW])),
     put(xopen_dtu, UDateAsString).
 
 
