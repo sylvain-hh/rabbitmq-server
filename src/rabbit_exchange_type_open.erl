@@ -452,7 +452,6 @@ validate_binding(_X, _) ->
     {error, {binding_invalid, "Forbidden declaration of binding's routing key", []}}.
 
 
-%% PROHIBIT ARRAY USAGE IN ANY RE (rkre..) EXCEPTED FOR RKTA !
 
 %% Binding's args keys of type 'list' must be validated
 %% --------------------------------------------------------------------------------
@@ -461,37 +460,24 @@ validate_list_type_usage(BindingType, Args) ->
 % OK go to next validation
 validate_list_type_usage(_, [], Args) ->
     validate_no_deep_lists(Args);
-% Attributes = and !=
+
+% = and != vs all and any
+% props
 validate_list_type_usage(all, [ {<<"x-?pr=", ?BIN>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with = operator in binding type 'all'", []}};
 validate_list_type_usage(any, [ {<<"x-?pr!=", ?BIN>>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with != operator in binding type 'any'", []}};
-% Attributes REGEX
-validate_list_type_usage(_, [ {<<"x-?prre", ?BIN>>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with regular expression", []}};
-validate_list_type_usage(_, [ {<<"x-?pr!re", ?BIN>>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with regular expression", []}};
-% Attributes < >
-validate_list_type_usage(_, [ {<<"x-?pr<", ?BIN>>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with < or > operator", []}};
-validate_list_type_usage(_, [ {<<"x-?pr>", ?BIN>>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with < or > operator", []}};
-
-% Routing Key = and !=
+% rk
 validate_list_type_usage(all, [ {<<"x-?rk=">>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with = operator in binding type 'all'", []}};
 validate_list_type_usage(any, [ {<<"x-?rk!=">>, array, _} | _ ], _) ->
     {error, {binding_invalid, "Invalid use of list type with != operator in binding type 'any'", []}};
-% Routing Key AMQP Topic
-validate_list_type_usage(_, [ {<<"x-?rkta", _/binary>>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with routing key AMQP topic operator", []}};
-validate_list_type_usage(_, [ {<<"x-?rk!ta", _/binary>>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with routing key AMQP topic operator", []}};
-% Header Key = and !=
+% headers
 validate_list_type_usage(all, [ {<<"x-?hkv= ", _/binary>>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with = operator with binding type 'all'", []}};
+    {error, {binding_invalid, "Invalid use of list type with = operator in binding type 'all'", []}};
 validate_list_type_usage(any, [ {<<"x-?hkv!= ", _/binary>>, array, _} | _ ], _) ->
-    {error, {binding_invalid, "Invalid use of list type with != operator with binding type 'any'", []}};
+    {error, {binding_invalid, "Invalid use of list type with != operator in binding type 'any'", []}};
+
 % Routing facilities
 validate_list_type_usage(_, [ {<< RuleKey:9/binary, _/binary >>, array, _} | _], _) when RuleKey==<<"x-addqre-">> ; RuleKey==<<"x-delqre-">> ->
     {error, {binding_invalid, "Invalid use of list type with regex in routing facilities", []}};
@@ -500,10 +486,10 @@ validate_list_type_usage(_, [ {<< RuleKey:10/binary, _/binary >>, array, _} | _]
 
 validate_list_type_usage(BindingType, [ {<< RuleKey/binary >>, array, _} | Tail ], Args) ->
     RKL = binary_to_list(RuleKey),
-    MatchOperators = ["x-?hkv<", "x-?hkv>", "x-?dture", "x-?dtunre", "x-?dtlre", "x-?dtlnre"],
+    MatchOperators = ["x-?hkv<", "x-?hkv>", "x-?pr<", "x-?pr>", "x-?dt"],
     case lists:filter(fun(S) -> lists:prefix(S, RKL) end, MatchOperators) of
         [] -> validate_list_type_usage(BindingType, Tail, Args);
-        _ -> {error, {binding_invalid, "Invalid use of list type with < or > operators and datetime related", []}}
+        _ -> {error, {binding_invalid, "Invalid use of list type with < or > operators and/or datetime related", []}}
     end;
 % Else go next
 validate_list_type_usage(BindingType, [ _ | Tail ], Args) ->
@@ -547,7 +533,7 @@ validate_operators2([ {_, decimal, _} | _ ]) ->
 validate_operators2([ {<<>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Binding's argument key can't be empty", []}};
 
-% Attributes
+% Properties
 % -------------------------------------
 % exnx
 validate_operators2([ {ArgK, longstr, ArgV} | Tail ]) when
@@ -568,23 +554,23 @@ validate_operators2([ {ArgKey = <<"x-?pr", ?BIN>>, longstr, ArgV} | Tail ]) ->
         catch _:_ -> ko
         end,
     case binary:split(ArgKey, <<" ">>) of
-        [AttrOp, AttrName] when (
-             AttrName==<<"content_type">> orelse AttrName==<<"content_encoding">>
-             orelse AttrName==<<"correlation_id">> orelse AttrName==<<"reply_to">>
-             orelse AttrName==<<"message_id">> orelse AttrName==<<"type">>
-             orelse AttrName==<<"user_id">> orelse AttrName==<<"app_id">>
-             orelse AttrName==<<"cluster_id">>
+        [PropOp, PropName] when (
+             PropName==<<"content_type">> orelse PropName==<<"content_encoding">>
+             orelse PropName==<<"correlation_id">> orelse PropName==<<"reply_to">>
+             orelse PropName==<<"message_id">> orelse PropName==<<"type">>
+             orelse PropName==<<"user_id">> orelse PropName==<<"app_id">>
+             orelse PropName==<<"cluster_id">>
              ) andalso (
-             AttrOp==<<"x-?pr=">> orelse AttrOp==<<"x-?pr!=">>
-             orelse AttrOp==<<"x-?prre">> orelse AttrOp==<<"x-?pr!re">>
+             PropOp==<<"x-?pr=">> orelse PropOp==<<"x-?pr!=">>
+             orelse PropOp==<<"x-?prre">> orelse PropOp==<<"x-?pr!re">>
              ) -> validate_operators2(Tail);
     % 'expiration' value is an integer (milliseconds) but typed "in" a string... ouch !
     % During binding add, this prop will be internally treated as a real integer :)
-        [AttrOp, AttrName] when is_integer(IntArgV) andalso AttrName==<<"expiration">>
+        [PropOp, PropName] when is_integer(IntArgV) andalso PropName==<<"expiration">>
              andalso (
-             AttrOp==<<"x-?pr=">> orelse AttrOp==<<"x-?pr!=">>
-             orelse AttrOp==<<"x-?pr<">> orelse AttrOp==<<"x-?pr<=">>
-             orelse AttrOp==<<"x-?pr>=">> orelse AttrOp==<<"x-?pr>">>
+             PropOp==<<"x-?pr=">> orelse PropOp==<<"x-?pr!=">>
+             orelse PropOp==<<"x-?pr<">> orelse PropOp==<<"x-?pr<=">>
+             orelse PropOp==<<"x-?pr>=">> orelse PropOp==<<"x-?pr>">>
              ) ->  validate_operators2(Tail);
         _ -> {error, {binding_invalid, "Invalid property match operator", []}}
     end;
@@ -592,13 +578,13 @@ validate_operators2([ {ArgKey = <<"x-?pr", ?BIN>>, longstr, ArgV} | Tail ]) ->
 validate_operators2([ {ArgKey = <<"x-?pr", ?BIN>>, _, N} | Tail ]) when is_integer(N) ->
     % so, we allow 'expiration' to be set as an integer too
     case binary:split(ArgKey, <<" ">>) of
-        [AttrOp, AttrName] when (
-             AttrName==<<"delivery_mode">> orelse AttrName==<<"priority">>
-             orelse AttrName==<<"timestamp">> orelse AttrName==<<"expiration">>
+        [PropOp, PropName] when (
+             PropName==<<"delivery_mode">> orelse PropName==<<"priority">>
+             orelse PropName==<<"timestamp">> orelse PropName==<<"expiration">>
              ) andalso (
-             AttrOp==<<"x-?pr=">> orelse AttrOp==<<"x-?pr!=">>
-             orelse AttrOp==<<"x-?pr<">> orelse AttrOp==<<"x-?pr<=">>
-             orelse AttrOp==<<"x-?pr>=">> orelse AttrOp==<<"x-?pr>">>
+             PropOp==<<"x-?pr=">> orelse PropOp==<<"x-?pr!=">>
+             orelse PropOp==<<"x-?pr<">> orelse PropOp==<<"x-?pr<=">>
+             orelse PropOp==<<"x-?pr>=">> orelse PropOp==<<"x-?pr>">>
              ) -> validate_operators2(Tail);
         _ -> {error, {binding_invalid, "Invalid property match operator", []}}
     end;
@@ -616,18 +602,15 @@ validate_operators2([ {<<"x-?rkre">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ])
 validate_operators2([ {<<"x-?rk!re">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
 
 validate_operators2([ {<<"x-?hkex">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkexs">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkexn">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkexb">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkex!s">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkex!n">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkex!b">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_operators2([ {<<"x-?hkex", _/binary>>, _, _} | _ ]) ->
+    {error, {binding_invalid, "Invalid declaration of x-?hkex operator", []}};
 validate_operators2([ {<<"x-?hk!ex">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-
-validate_operators2([ {<<"x-?hkis ", ?ONE_CHAR_AT_LEAST>>, longstr, <<"string">>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkis ", ?ONE_CHAR_AT_LEAST>>, longstr, <<"number">>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkis ", ?ONE_CHAR_AT_LEAST>>, longstr, <<"boolean">>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkis", _/binary>>, _, _} | _ ]) ->
-    {error, {binding_invalid, "Invalid declaration of x-?hkis operator", []}};
-validate_operators2([ {<<"x-?hk!is ", ?ONE_CHAR_AT_LEAST>>, longstr, <<"string">>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hk!is ", ?ONE_CHAR_AT_LEAST>>, longstr, <<"number">>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hk!is ", ?ONE_CHAR_AT_LEAST>>, longstr, <<"boolean">>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hk!is", _/binary>>, _, _} | _ ]) ->
-    {error, {binding_invalid, "Invalid declaration of x-?hk!is operator", []}};
 
 % Dests ops (exchanges)
 
@@ -813,8 +796,8 @@ is_match_dt_any([ {dtlnre, V} | Tail]) ->
 
 %% Match on properties
 %% -----------------------------------------------------------------------------
-get_msg_prop_value(AttrId, MsgProps) ->
-    case AttrId of
+get_msg_prop_value(PropId, MsgProps) ->
+    case PropId of
         ex -> try binary_to_integer(MsgProps#'P_basic'.expiration)
             catch _:_ -> MsgProps#'P_basic'.expiration
             end;
@@ -834,48 +817,48 @@ get_msg_prop_value(AttrId, MsgProps) ->
 
 
 
-is_match_pr(all, Rules, MsgAT) ->
-    is_match_pr_all(Rules, MsgAT);
-is_match_pr(any, Rules, MsgAT) ->
-    is_match_pr_any(Rules, MsgAT).
+is_match_pr(all, Rules, MsgProp) ->
+    is_match_pr_all(Rules, MsgProp);
+is_match_pr(any, Rules, MsgProp) ->
+    is_match_pr_any(Rules, MsgProp).
 
 % all
 % --------------------------------------
 is_match_pr_all([], _) ->
     true;
-is_match_pr_all([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
-    MsgATV = get_msg_prop_value(AttrId, MsgProps),
+is_match_pr_all([ {PropOp, PropId, V} | Tail], MsgProps) ->
+    MsgPropV = get_msg_prop_value(PropId, MsgProps),
     if
-        AttrOp == nx andalso MsgATV == undefined ->
+        PropOp == nx andalso MsgPropV == undefined ->
             is_match_pr_all(Tail, MsgProps);
-        MsgATV /= undefined ->
-            case AttrOp of
+        MsgPropV /= undefined ->
+            case PropOp of
                 ex -> is_match_pr_all(Tail, MsgProps);
                 nx -> false;
-                eq when MsgATV == V ->
+                eq when MsgPropV == V ->
                     is_match_pr_all(Tail, MsgProps);
                 eq -> false;
-                ne when MsgATV /= V ->
+                ne when MsgPropV /= V ->
                     is_match_pr_all(Tail, MsgProps);
                 ne -> false;
-                re -> case re:run(MsgATV, V, [ {capture, none} ]) == match of
+                re -> case re:run(MsgPropV, V, [ {capture, none} ]) == match of
                           true -> is_match_pr_all(Tail, MsgProps);
                           _ -> false
                       end;
-                nre -> case re:run(MsgATV, V, [ {capture, none} ]) == nomatch of
+                nre -> case re:run(MsgPropV, V, [ {capture, none} ]) == nomatch of
                            true -> is_match_pr_all(Tail, MsgProps);
                            _ -> false
                        end;
-                lt when MsgATV < V ->
+                lt when MsgPropV < V ->
                     is_match_pr_all(Tail, MsgProps);
                 lt -> false;
-                le when MsgATV =< V ->
+                le when MsgPropV =< V ->
                     is_match_pr_all(Tail, MsgProps);
                 le -> false;
-                ge when MsgATV >= V ->
+                ge when MsgPropV >= V ->
                     is_match_pr_all(Tail, MsgProps);
                 ge -> false;
-                gt when MsgATV > V ->
+                gt when MsgPropV > V ->
                     is_match_pr_all(Tail, MsgProps);
                 gt -> false
             end;
@@ -887,39 +870,39 @@ is_match_pr_all([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
 % --------------------------------------
 is_match_pr_any([], _) ->
     false;
-is_match_pr_any([ {AttrOp, AttrId, V} | Tail], MsgProps) ->
-    MsgATV = get_msg_prop_value(AttrId, MsgProps),
+is_match_pr_any([ {PropOp, PropId, V} | Tail], MsgProps) ->
+    MsgPropV = get_msg_prop_value(PropId, MsgProps),
     if
-        AttrOp == nx andalso MsgATV == undefined ->
+        PropOp == nx andalso MsgPropV == undefined ->
             true;
-        MsgATV /= undefined ->
-            case AttrOp of
+        MsgPropV /= undefined ->
+            case PropOp of
                 ex -> true;
                 nx -> is_match_pr_any(Tail, MsgProps);
-                eq when MsgATV == V ->
+                eq when MsgPropV == V ->
                     true;
                 eq -> is_match_pr_any(Tail, MsgProps);
-                ne when MsgATV /= V ->
+                ne when MsgPropV /= V ->
                     true;
                 ne -> is_match_pr_any(Tail, MsgProps);
-                re -> case re:run(MsgATV, V, [ {capture, none} ]) == match of
+                re -> case re:run(MsgPropV, V, [ {capture, none} ]) == match of
                           true -> true;
                           _ -> is_match_pr_any(Tail, MsgProps)
                       end;
-                nre -> case re:run(MsgATV, V, [ {capture, none} ]) == nomatch of
+                nre -> case re:run(MsgPropV, V, [ {capture, none} ]) == nomatch of
                            true -> true;
                            _ -> is_match_pr_any(Tail, MsgProps)
                        end;
-                lt when MsgATV < V ->
+                lt when MsgPropV < V ->
                     true;
                 lt -> is_match_pr_any(Tail, MsgProps);
-                le when MsgATV =< V ->
+                le when MsgPropV =< V ->
                     true;
                 le -> is_match_pr_any(Tail, MsgProps);
-                ge when MsgATV >= V ->
+                ge when MsgPropV >= V ->
                     true;
                 ge -> is_match_pr_any(Tail, MsgProps);
-                gt when MsgATV > V ->
+                gt when MsgPropV > V ->
                     true;
                 gt -> is_match_pr_any(Tail, MsgProps)
             end;
@@ -1022,27 +1005,41 @@ is_match_hk_all([{_, nx, _} | _], _) -> false;
 is_match_hk_all([{_, ex, _} | BNext], [ _ | HNext]) ->
     is_match_hk_all(BNext, HNext);
 
-% HK type checking
-%% Should do the same with shortstr ?
-is_match_hk_all([{_, is, s} | BNext], HCur = [{_, longstr, _} | _]) ->
-    is_match_hk_all(BNext, HCur);
-%% Should list by AMQP types to avoid corner cases when types are misused ?
-is_match_hk_all([{_, is, n} | BNext], HCur = [{_, _, HV} | _]) when is_number(HV) ->
-    is_match_hk_all(BNext, HCur);
-is_match_hk_all([{_, is, b} | BNext], HCur = [{_, bool, _} | _]) ->
-    is_match_hk_all(BNext, HCur);
-is_match_hk_all([{_, is, _} | _], _) ->
-    false;
-is_match_hk_all([{_, nis, s} | _], [{_, longstr, _} | _]) ->
-    false;
-is_match_hk_all([{_, nis, n} | _], [{_, _, HV} | _]) when is_number(HV) ->
-    false;
-is_match_hk_all([{_, nis, b} | _], [{_, bool, _} | _]) ->
-    false;
-is_match_hk_all([{_, nis, _} | BNext], HCur) ->
-    is_match_hk_all(BNext, HCur);
+%  .. with type checking
+is_match_hk_all([{_, is, _} | BNext], [{_, Type, _} | HNext]) ->
+    case Type of
+        longstr -> is_match_hk_all(BNext, HNext);
+        _ -> false
+    end;
+is_match_hk_all([{_, ib, _} | BNext], [{_, Type, _} | HNext]) ->
+    case Type of
+        bool -> is_match_hk_all(BNext, HNext);
+        _ -> false
+    end;
+is_match_hk_all([{_, in, _} | BNext], [{_, _, HV} | HNext]) ->
+    case is_number(HV) of
+        true -> is_match_hk_all(BNext, HNext);
+        _ -> false
+    end;
 
-% <= < = != > >=
+is_match_hk_all([{_, nis, _} | BNext], [{_, Type, _} | HNext]) ->
+    case Type of
+        longstr -> false;
+        _ -> is_match_hk_all(BNext, HNext)
+    end;
+is_match_hk_all([{_, nib, _} | BNext], [{_, Type, _} | HNext]) ->
+    case Type of
+        bool -> false;
+        _ -> is_match_hk_all(BNext, HNext)
+    end;
+is_match_hk_all([{_, nin, _} | BNext], [{_, _, HV} | HNext]) ->
+    case is_number(HV) of
+        true -> false;
+        _ -> is_match_hk_all(BNext, HNext)
+    end;
+
+
+% <= < != > >=
 is_match_hk_all([{_, ne, BV} | BNext], HCur = [{_, _, HV} | _])
     when BV /= HV -> is_match_hk_all(BNext, HCur);
 is_match_hk_all([{_, ne, _} | _], _) -> false;
@@ -1067,14 +1064,12 @@ is_match_hk_all([{_, re, BV} | BNext], HCur = [{_, longstr, HV} | _]) ->
         match -> is_match_hk_all(BNext, HCur);
         _ -> false
     end;
-% Message header value is not a string : regex returns always false :
 is_match_hk_all([{_, re, _} | _], _) -> false;
 is_match_hk_all([{_, nre, BV} | BNext], HCur = [{_, longstr, HV} | _]) ->
     case re:run(HV, BV, [ {capture, none} ]) of
         nomatch -> is_match_hk_all(BNext, HCur);
         _ -> false
     end;
-% Message header value is not a string : regex returns always false :
 is_match_hk_all([{_, nre, _} | _], _) -> false.
 
 
@@ -1105,22 +1100,38 @@ is_match_hk_any([{_, eq, BV} | _], [{_, _, HV} | _]) when BV == HV -> true;
 is_match_hk_any([{_, ex, _} | _], _) -> true;
 
 % HK type checking
-is_match_hk_any([{_, is, s} | _], [{_, longstr, _} | _]) ->
-    true;
-is_match_hk_any([{_, is, n} | _], [{_, _, HV} | _]) when is_number(HV) ->
-    true;
-is_match_hk_any([{_, is, b} | _], [{_, bool, _} | _]) ->
-    true;
-is_match_hk_any([{_, is, _} | BNext], HCur) ->
-    is_match_hk_any(BNext, HCur);
-is_match_hk_any([{_, nis, s} | BNext], HCur = [{_, longstr, _} | _]) ->
-    is_match_hk_any(BNext, HCur);
-is_match_hk_any([{_, nis, n} | BNext], HCur = [{_, _, HV} | _]) when is_number(HV) ->
-    is_match_hk_any(BNext, HCur);
-is_match_hk_any([{_, nis, b} | BNext], HCur = [{_, bool, _} | _]) ->
-    is_match_hk_any(BNext, HCur);
-is_match_hk_any([{_, nis, _} | _], _) ->
-    true;
+is_match_hk_any([{_, is, _} | BNext], HCur = [{_, Type, _} | _]) ->
+    case Type of
+        longstr -> true;
+        _ -> is_match_hk_any(BNext, HCur)
+    end;
+is_match_hk_any([{_, ib, _} | BNext], HCur = [{_, Type, _} | _]) ->
+    case Type of
+        bool -> true;
+        _ -> is_match_hk_any(BNext, HCur)
+    end;
+is_match_hk_any([{_, in, _} | BNext], HCur = [{_, _, HV} | _]) ->
+    case is_number(HV) of
+        true -> true;
+        _ -> is_match_hk_any(BNext, HCur)
+    end;
+
+is_match_hk_any([{_, nis, _} | BNext], HCur = [{_, Type, _} | _]) ->
+    case Type of
+        longstr -> is_match_hk_any(BNext, HCur);
+        _ -> true
+    end;
+is_match_hk_any([{_, nib, _} | BNext], HCur = [{_, Type, _} | _]) ->
+    case Type of
+        bool -> is_match_hk_any(BNext, HCur);
+        _ -> true
+    end;
+is_match_hk_any([{_, nin, _} | BNext], HCur = [{_, _, HV} | _]) ->
+    case is_number(HV) of
+        true -> is_match_hk_any(BNext, HCur);
+        _ -> true
+    end;
+
 
 is_match_hk_any([{_, ne, BV} | _], [{_, _, HV} | _]) when HV /= BV -> true;
 
@@ -1209,23 +1220,23 @@ get_match_hk_ops([], Result) -> Result;
 % Does a key exist ?
 get_match_hk_ops([ {<<"x-?hkex">>, _, K} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {K, ex, nil} | Res]);
+% Does a key exist and its value of type..
+get_match_hk_ops([ {<<"x-?hkexs">>, _, K} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, is, nil} | Res]);
+get_match_hk_ops([ {<<"x-?hkexn">>, _, K} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, in, nil} | Res]);
+get_match_hk_ops([ {<<"x-?hkexb">>, _, K} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, ib, nil} | Res]);
+% Does a key exist and its value NOT of type..
+get_match_hk_ops([ {<<"x-?hkex!s">>, _, K} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, nis, nil} | Res]);
+get_match_hk_ops([ {<<"x-?hkex!n">>, _, K} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, nin, nil} | Res]);
+get_match_hk_ops([ {<<"x-?hkex!b">>, _, K} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, nib, nil} | Res]);
 % Does a key NOT exist ?
 get_match_hk_ops([ {<<"x-?hk!ex">>, _, K} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {K, nx, nil} | Res]);
-% Does a key exist and its value of type..
-get_match_hk_ops([ {<<"x-?hkis ", K/binary>>, _, <<"string">>} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, is, s} | Res]);
-get_match_hk_ops([ {<<"x-?hkis ", K/binary>>, _, <<"number">>} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, is, n} | Res]);
-get_match_hk_ops([ {<<"x-?hkis ", K/binary>>, _, <<"boolean">>} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, is, b} | Res]);
-% Does a key exist and its value NOT of type..
-get_match_hk_ops([ {<<"x-?hk!is ", K/binary>>, _, <<"string">>} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, nis, s} | Res]);
-get_match_hk_ops([ {<<"x-?hk!is ", K/binary>>, _, <<"number">>} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, nis, n} | Res]);
-get_match_hk_ops([ {<<"x-?hk!is ", K/binary>>, _, <<"boolean">>} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, nis, b} | Res]);
 
 % operators <= < = != > >=
 get_match_hk_ops([ {<<"x-?hkv<= ", K/binary>>, _, V} | Tail ], Res) ->
@@ -1279,7 +1290,7 @@ get_binding_order(Args, Default) ->
 
 %% Get rules on properties from binding's operators
 %% -----------------------------------------------------------------------------
-attrName2Id(V) ->
+propName2Id(V) ->
     case V of
         <<"content_type">> -> ct;
         <<"content_encoding">> -> ce;
@@ -1308,11 +1319,11 @@ get_binding_pr_rules([ {K, _, V} | Tail ], Res) when
         <<"x-?prex">> -> ex;
         <<"x-?pr!ex">> -> nx
     end,
-    AttrId = attrName2Id(V),
-    get_binding_pr_rules(Tail, [ {BindingOp, AttrId, V} | Res]);
+    PropId = propName2Id(V),
+    get_binding_pr_rules(Tail, [ {BindingOp, PropId, V} | Res]);
 get_binding_pr_rules([ {K = <<"x-?pr", ?BIN>>, T, V} | Tail ], Res) ->
-    [AttrOp, AttrName] = binary:split(K, <<" ">>),
-    BindingOp = case AttrOp of
+    [PropOp, PropName] = binary:split(K, <<" ">>),
+    BindingOp = case PropOp of
         <<"x-?pr=">> -> eq;
         <<"x-?pr!=">> -> ne;
         <<"x-?prre">> -> re;
@@ -1322,11 +1333,11 @@ get_binding_pr_rules([ {K = <<"x-?pr", ?BIN>>, T, V} | Tail ], Res) ->
         <<"x-?pr>=">> -> ge;
         <<"x-?pr>">> -> gt
     end,
-    AttrId = attrName2Id(AttrName),
+    PropId = propName2Id(PropName),
     % Special case for 'expiration' prop..
-    case AttrId == ex andalso T == longstr of
-        true -> get_binding_pr_rules(Tail, [ {BindingOp, AttrId, binary_to_integer(V)} | Res]);
-        _    -> get_binding_pr_rules(Tail, [ {BindingOp, AttrId, V} | Res])
+    case PropId == ex andalso T == longstr of
+        true -> get_binding_pr_rules(Tail, [ {BindingOp, PropId, binary_to_integer(V)} | Res]);
+        _    -> get_binding_pr_rules(Tail, [ {BindingOp, PropId, V} | Res])
     end;
 get_binding_pr_rules([ _ | Tail ], Res) ->
     get_binding_pr_rules(Tail, Res).
