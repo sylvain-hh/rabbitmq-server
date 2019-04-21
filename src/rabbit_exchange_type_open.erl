@@ -441,7 +441,7 @@ is_match_hk(any, Args, Headers) ->
 
 
 validate_binding(_X, #binding{args = Args, key = << >>, destination = Dest}) ->
-    Args2 = rebuild_args(Args, Dest),
+    Args2 = transform_x_del_dest(Args, Dest),
     case rabbit_misc:table_lookup(Args2, <<"x-match">>) of
         {longstr, <<"all">>} -> validate_list_type_usage(all, Args2);
         {longstr, <<"any">>} -> validate_list_type_usage(any, Args2);
@@ -497,11 +497,13 @@ validate_list_type_usage(BindingType, [ _ | Tail ], Args) ->
 
 
 %% Binding can't have array in array :
-%% --------------------------------------------------------------------------------
+%% -----------------------------------------------------------------------------
 validate_no_deep_lists(Args) -> 
     validate_no_deep_lists(Args, [], Args).
 
-validate_no_deep_lists([], [], Args) -> validate_operators(Args);
+validate_no_deep_lists([], [], Args) ->
+    FlattenedArgs = flatten_table(Args),
+    validate_op(FlattenedArgs);
 validate_no_deep_lists(_, [_ | _], _) ->
     {error, {binding_invalid, "Invalid use of list in list", []}};
 validate_no_deep_lists([ {_, array, Vs} | Tail ], _, Args) ->
@@ -511,217 +513,199 @@ validate_no_deep_lists([ _ | Tail ], _, Args) ->
     validate_no_deep_lists(Tail, [], Args).
 
 
-
-%% Binding is INvalidated if some rule does not match anything,
+%% Operators validation
 %% -----------------------------------------------------------------------------
-%%  so that we can't have some "unexpected" results
-validate_operators(Args) ->
-  FlattenedArgs = flatten_table(Args),
-  case validate_operators2(FlattenedArgs) of
-    ok -> validate_regexes(Args);
-    Err -> Err
-  end.
-
-validate_operators2([]) -> ok;
+validate_op([]) -> ok;
 % x-match have been checked upstream due to checks on list type
-validate_operators2([ {<<"x-match">>, _, _} | Tail ]) ->
-    validate_operators2(Tail);
+validate_op([ {<<"x-match">>, _, _} | Tail ]) ->
+    validate_op(Tail);
 % Decimal type is forbidden
-validate_operators2([ {_, decimal, _} | _ ]) ->
+validate_op([ {_, decimal, _} | _ ]) ->
     {error, {binding_invalid, "Usage of decimal type is forbidden", []}};
 % Do not think that can't happen... it can ! :)
-validate_operators2([ {<<>>, _, _} | _ ]) ->
+validate_op([ {<<>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Binding's argument key can't be empty", []}};
 
 % Properties
 % -------------------------------------
 % exnx
-validate_operators2([ {ArgK, longstr, ArgV} | Tail ]) when
-        (ArgK == <<"x-?prex">> orelse ArgK == <<"x-?pr!ex">>) andalso
-        (ArgV == <<"content_type">> orelse ArgV == <<"content_encoding">>
-            orelse ArgV == <<"correlation_id">> orelse ArgV == <<"reply_to">>
-            orelse ArgV == <<"expiration">> orelse ArgV == <<"message_id">>
-            orelse ArgV == <<"type">> orelse  ArgV == <<"user_id">>
-            orelse ArgV == <<"app_id">> orelse  ArgV == <<"cluster_id">>
-            orelse ArgV == <<"delivery_mode">> orelse ArgV == <<"priority">>
-            orelse ArgV == <<"timestamp">>
+validate_op([ {Op, longstr, Prop} | Tail ]) when
+        (Op == <<"x-?prex">> orelse Op == <<"x-?pr!ex">>) andalso
+        (Prop == <<"content_type">> orelse Prop == <<"content_encoding">> orelse
+            Prop == <<"correlation_id">> orelse Prop == <<"reply_to">> orelse
+            Prop == <<"expiration">> orelse Prop == <<"message_id">> orelse
+            Prop == <<"type">> orelse  Prop == <<"user_id">> orelse
+            Prop == <<"app_id">> orelse  Prop == <<"cluster_id">> orelse
+            Prop == <<"delivery_mode">> orelse Prop == <<"priority">> orelse
+            Prop == <<"timestamp">>
         ) ->
-    validate_operators2(Tail);
-% str
-validate_operators2([ {ArgKey = <<"x-?pr", ?BIN>>, longstr, ArgV} | Tail ]) ->
-    % For 'expiration' prop only..
-    IntArgV = try binary_to_integer(ArgV)
-        catch _:_ -> ko
-        end,
-    case binary:split(ArgKey, <<" ">>) of
-        [PropOp, PropName] when (
-             PropName==<<"content_type">> orelse PropName==<<"content_encoding">>
-             orelse PropName==<<"correlation_id">> orelse PropName==<<"reply_to">>
-             orelse PropName==<<"message_id">> orelse PropName==<<"type">>
-             orelse PropName==<<"user_id">> orelse PropName==<<"app_id">>
-             orelse PropName==<<"cluster_id">>
-             ) andalso (
-             PropOp==<<"x-?pr=">> orelse PropOp==<<"x-?pr!=">>
-             orelse PropOp==<<"x-?prre">> orelse PropOp==<<"x-?pr!re">>
-             ) -> validate_operators2(Tail);
-    % 'expiration' value is an integer (milliseconds) but typed "in" a string... ouch !
-    % During binding add, this prop will be internally treated as a real integer :)
-        [PropOp, PropName] when is_integer(IntArgV) andalso PropName==<<"expiration">>
-             andalso (
-             PropOp==<<"x-?pr=">> orelse PropOp==<<"x-?pr!=">>
-             orelse PropOp==<<"x-?pr<">> orelse PropOp==<<"x-?pr<=">>
-             orelse PropOp==<<"x-?pr>=">> orelse PropOp==<<"x-?pr>">>
-             ) ->  validate_operators2(Tail);
+    validate_op(Tail);
+% str (expiration is naturally an integer)
+validate_op([ {ArgK = <<"x-?pr", ?BIN>>, longstr, ArgV} | Tail ]) ->
+    case binary:split(ArgK, <<" ">>) of
+        [Op, Prop] when (Prop==<<"content_type">> orelse Prop==<<"content_encoding">> orelse
+             Prop==<<"correlation_id">> orelse Prop==<<"reply_to">> orelse
+             Prop==<<"message_id">> orelse Prop==<<"type">> orelse
+             Prop==<<"user_id">> orelse Prop==<<"app_id">> orelse Prop==<<"cluster_id">>) ->
+                 if
+                     (Op==<<"x-?pr=">> orelse Op==<<"x-?pr!=">>) ->
+                         validate_op(Tail);
+                     (Op==<<"x-?prre">> orelse Op==<<"x-?pr!re">>) ->
+                         validate_regex(ArgV, Tail);
+                     true -> {error, {binding_invalid, "Invalid property match operator", []}}
+                 end;
         _ -> {error, {binding_invalid, "Invalid property match operator", []}}
     end;
-% num
-validate_operators2([ {ArgKey = <<"x-?pr", ?BIN>>, _, N} | Tail ]) when is_integer(N) ->
-    % so, we allow 'expiration' to be set as an integer too
-    case binary:split(ArgKey, <<" ">>) of
-        [PropOp, PropName] when (
-             PropName==<<"delivery_mode">> orelse PropName==<<"priority">>
-             orelse PropName==<<"timestamp">> orelse PropName==<<"expiration">>
-             ) andalso (
-             PropOp==<<"x-?pr=">> orelse PropOp==<<"x-?pr!=">>
-             orelse PropOp==<<"x-?pr<">> orelse PropOp==<<"x-?pr<=">>
-             orelse PropOp==<<"x-?pr>=">> orelse PropOp==<<"x-?pr>">>
-             ) -> validate_operators2(Tail);
+% int
+validate_op([ {ArgK = <<"x-?pr", ?BIN>>, _, Int} | Tail ]) when is_integer(Int) ->
+    case binary:split(ArgK, <<" ">>) of
+        [Op, Prop] when (Prop==<<"delivery_mode">> orelse Prop==<<"priority">> orelse
+                 Prop==<<"timestamp">> orelse Prop==<<"expiration">>
+                 ) andalso (Op==<<"x-?pr=">> orelse Op==<<"x-?pr!=">>
+                 orelse Op==<<"x-?pr<">> orelse Op==<<"x-?pr<=">>
+                 orelse Op==<<"x-?pr>=">> orelse Op==<<"x-?pr>">>) ->
+                     validate_op(Tail);
         _ -> {error, {binding_invalid, "Invalid property match operator", []}}
     end;
 
 % Datettime match ops
-validate_operators2([ {<<"x-?dture">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?dtunre">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?dtlre">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?dtlnre">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_op([ {Op, longstr, Regex} | Tail ])
+        when Op==<<"x-?dture">> orelse Op==<<"x-?dtu!re">>
+            orelse Op==<<"x-?dtlre">> orelse Op==<<"x-?dtl!re">> ->
+    validate_regex(Regex, Tail);
 
 % Routing key ops
-validate_operators2([ {<<"x-?rk=">>, longstr, <<_/binary>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?rk!=">>, longstr, <<_/binary>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?rkre">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?rk!re">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+validate_op([ {Op, longstr, _} | Tail ])
+        when Op==<<"x-?rk=">> orelse Op==<<"x-?rk!=">> ->
+    validate_op(Tail);
+validate_op([ {Op, longstr, Regex} | Tail ])
+        when Op==<<"x-?rkre">> orelse Op==<<"x-?rk!re">> ->
+    validate_regex(Regex, Tail);
+% AMQP topics (check is done from the result of the regex only)
+validate_op([ {Op, longstr, Topic} | Tail ])
+        when Op==<<"x-?rkta">> orelse Op==<<"x-?rk!ta">> ->
+    Regex = topic_amqp_to_re(Topic),
+    case is_regex_valid(Regex) of
+        true -> validate_op(Tail);
+        _ -> {error, {binding_invalid, "Invalid AMQP topic", []}}
+    end;
+validate_op([ {Op, longstr, Topic} | Tail ])
+        when Op==<<"x-?rktaci">> orelse Op==<<"x-?rk!taci">> ->
+    Regex = topic_amqp_to_re_ci(Topic),
+    case is_regex_valid(Regex) of
+        true -> validate_op(Tail);
+        _ -> {error, {binding_invalid, "Invalid AMQP topic", []}}
+    end;
 
-validate_operators2([ {<<"x-?hkex">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkexs">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkexn">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkexb">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkex!s">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkex!n">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkex!b">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkex", _/binary>>, _, _} | _ ]) ->
-    {error, {binding_invalid, "Invalid declaration of x-?hkex operator", []}};
-validate_operators2([ {<<"x-?hk!ex">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
+% Dests ops (exchange)
+validate_op([ {Op, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ])
+        when Op==<<"x-adde-ontrue">> orelse Op==<<"x-adde-onfalse">> orelse
+            Op==<<"x-dele-ontrue">> orelse Op==<<"x-dele-onfalse">> ->
+    validate_op(Tail);
+% Dests ops (queue)
+validate_op([ {Op, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ])
+        when Op==<<"x-addq-ontrue">> orelse Op==<<"x-addq-onfalse">> orelse
+            Op==<<"x-delq-ontrue">> orelse Op==<<"x-delq-onfalse">> ->
+    validate_op(Tail);
+% Dests ops regex (queue)
+validate_op([ {Op, longstr, Regex} | Tail ])
+        when Op==<<"x-addqre-ontrue">> orelse Op==<<"x-addq!re-ontrue">> orelse
+            Op==<<"x-addqre-onfalse">> orelse Op==<<"x-addq!re-onfalse">> orelse
+            Op==<<"x-delqre-ontrue">> orelse Op==<<"x-delq!re-ontrue">> orelse
+            Op==<<"x-delqre-onfalse">> orelse Op==<<"x-delq!re-onfalse">> ->
+    validate_regex(Regex, Tail);
 
-% Dests ops (exchanges)
-
-validate_operators2([ {<<"x-adde-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-adde-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-dele-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-dele-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-% Dests ops (queues)
-validate_operators2([ {<<"x-addq-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-addqre-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-addq!re-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-addq-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-addqre-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-addq!re-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-delq-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-delqre-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-delq!re-ontrue">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-delq-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-delqre-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-delq!re-onfalse">>, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) -> validate_operators2(Tail);
-
-% Dests ops (msg)
-validate_operators2([ {<<"x-msg-addq-ontrue">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
-validate_operators2([ {<<"x-msg-addq-onfalse">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
-validate_operators2([ {<<"x-msg-adde-ontrue">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
-validate_operators2([ {<<"x-msg-adde-onfalse">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
-validate_operators2([ {<<"x-msg-delq-ontrue">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
-validate_operators2([ {<<"x-msg-delq-onfalse">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
-validate_operators2([ {<<"x-msg-dele-ontrue">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
-validate_operators2([ {<<"x-msg-dele-onfalse">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
-validate_operators2([ {<<"x-msg-addqre-ontrue">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
-validate_operators2([ {<<"x-msg-addqre-onfalse">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
-validate_operators2([ {<<"x-msg-delqre-ontrue">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
-validate_operators2([ {<<"x-msg-delqre-onfalse">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
-
-validate_operators2([ {<<"x-msg-destq-rk">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
+% Msg dests ops
+validate_op([ {Op, longstr, <<>>} | Tail ]) when
+        Op==<<"x-msg-addq-ontrue">> orelse Op==<<"x-msg-addq-onfalse">> orelse
+        Op==<<"x-msg-adde-ontrue">> orelse Op==<<"x-msg-adde-onfalse">> orelse
+        Op==<<"x-msg-delq-ontrue">> orelse Op==<<"x-msg-delq-onfalse">> orelse
+        Op==<<"x-msg-dele-ontrue">> orelse Op==<<"x-msg-dele-onfalse">> orelse
+        Op==<<"x-msg-addqre-ontrue">> orelse Op==<<"x-msg-addqre-onfalse">> orelse
+        Op==<<"x-msg-delqre-ontrue">> orelse Op==<<"x-msg-delqre-onfalse">> orelse
+        Op==<<"x-msg-destq-rk">> ->
+    validate_op(Tail);
 
 % Binding order
-validate_operators2([ {<<"x-order">>, _, V} | Tail ]) when is_integer(V) ->
+validate_op([ {<<"x-order">>, _, V} | Tail ]) when is_integer(V) ->
     IsSuperUser = is_super_user(),
     if
-        IsSuperUser -> validate_operators2(Tail);
-        V > 99 andalso V < 1000000 -> validate_operators2(Tail);
+        IsSuperUser -> validate_op(Tail);
+        V > 99 andalso V < 1000000 -> validate_op(Tail);
         true -> {error, {binding_invalid, "Binding's order must be an integer between 100 and 999999", []}}
     end;
 
 % Gotos
-validate_operators2([ {<<"x-goto-on", BoolBin/binary>>, _, V} | Tail ]) when (BoolBin == <<"true">> orelse BoolBin == <<"false">>) andalso is_integer(V) ->
+validate_op([ {<<"x-goto-on", BoolBin/binary>>, _, V} | Tail ]) when (BoolBin == <<"true">> orelse BoolBin == <<"false">>) andalso is_integer(V) ->
     IsSuperUser = is_super_user(),
     if
-        IsSuperUser -> validate_operators2(Tail);
-        V > 99 andalso V < 1000000 -> validate_operators2(Tail);
+        IsSuperUser -> validate_op(Tail);
+        V > 99 andalso V < 1000000 -> validate_op(Tail);
         true -> {error, {binding_invalid, "Binding's goto must be an integer between 100 and 999999", []}}
    end;
 
 % Stops
-validate_operators2([ {<<"x-stop-ontrue">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
-validate_operators2([ {<<"x-stop-onfalse">>, longstr, <<>>} | Tail ]) ->
-    validate_operators2(Tail);
+validate_op([ {<<"x-stop-ontrue">>, longstr, <<>>} | Tail ]) ->
+    validate_op(Tail);
+validate_op([ {<<"x-stop-onfalse">>, longstr, <<>>} | Tail ]) ->
+    validate_op(Tail);
+
+validate_op([ {Op, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) when
+        (Op==<<"x-?hkex">> orelse Op==<<"x-?hkexs">> orelse Op==<<"x-?hkexn">> orelse
+         Op==<<"x-?hkexb">> orelse Op==<<"x-?hkex!s">> orelse Op==<<"x-?hkex!n">> orelse
+         Op==<<"x-?hkex!b">> orelse Op==<<"x-?hk!ex">>
+        ) ->
+    validate_op(Tail);
 
 % Operators hkv with < or > must be numeric only.
-validate_operators2([ {<<"x-?hkv<= ", ?ONE_CHAR_AT_LEAST>>, _, V} | Tail ]) when is_number(V) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkv<= ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
+validate_op([ {<<"x-?hkv<= ", ?ONE_CHAR_AT_LEAST>>, _, Num} | Tail ]) when is_number(Num) ->
+    validate_op(Tail);
+validate_op([ {<<"x-?hkv<= ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
-validate_operators2([ {<<"x-?hkv< ", ?ONE_CHAR_AT_LEAST>>, _, V} | Tail ]) when is_number(V) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkv< ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
+validate_op([ {<<"x-?hkv< ", ?ONE_CHAR_AT_LEAST>>, _, Num} | Tail ]) when is_number(Num) ->
+    validate_op(Tail);
+validate_op([ {<<"x-?hkv< ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
-validate_operators2([ {<<"x-?hkv>= ", ?ONE_CHAR_AT_LEAST>>, _, V} | Tail ]) when is_number(V) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkv>= ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
+validate_op([ {<<"x-?hkv>= ", ?ONE_CHAR_AT_LEAST>>, _, Num} | Tail ]) when is_number(Num) ->
+    validate_op(Tail);
+validate_op([ {<<"x-?hkv>= ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
-validate_operators2([ {<<"x-?hkv> ", ?ONE_CHAR_AT_LEAST>>, _, V} | Tail ]) when is_number(V) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkv> ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
+validate_op([ {<<"x-?hkv> ", ?ONE_CHAR_AT_LEAST>>, _, Num} | Tail ]) when is_number(Num) ->
+    validate_op(Tail);
+validate_op([ {<<"x-?hkv> ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
 
-validate_operators2([ {<<"x-?hkv= ", ?ONE_CHAR_AT_LEAST>>, _, _} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkvre ", ?ONE_CHAR_AT_LEAST>>, longstr, _} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkv!= ", ?ONE_CHAR_AT_LEAST>>, _, _} | Tail ]) -> validate_operators2(Tail);
-validate_operators2([ {<<"x-?hkv!re ", ?ONE_CHAR_AT_LEAST>>, longstr, _} | Tail ]) -> validate_operators2(Tail);
+validate_op([ {<<"x-?hkv= ", ?ONE_CHAR_AT_LEAST>>, _, _} | Tail ]) ->
+    validate_op(Tail);
+validate_op([ {<<"x-?hkv!= ", ?ONE_CHAR_AT_LEAST>>, _, _} | Tail ]) ->
+    validate_op(Tail);
+validate_op([ {<<"x-?hkvre ", ?ONE_CHAR_AT_LEAST>>, longstr, Regex} | Tail ]) ->
+    validate_regex(Regex, Tail);
+validate_op([ {<<"x-?hkv!re ", ?ONE_CHAR_AT_LEAST>>, longstr, Regex} | Tail ]) ->
+    validate_regex(Regex, Tail);
 
-validate_operators2([ {InvalidKey = <<"x-", _/binary>>, _, _} | _ ]) ->
-    {error, {binding_invalid, "Binding's key ~p cannot start with 'x-' in x-open exchange; use new operators to match such keys", [InvalidKey]}};
-validate_operators2([ _ | Tail ]) -> validate_operators2(Tail).
+validate_op([ {InvalidKey = <<"x-", _/binary>>, _, _} | _ ]) ->
+    {error, {binding_invalid, "Unknown or invalid argument's key '~p'", [InvalidKey]}};
+validate_op([ _ | Tail ]) ->
+    validate_op(Tail).
 
 
-validate_regexes_item(RegexBin, Tail) ->
-    case re:compile(RegexBin) of
-        {ok, _} -> validate_regexes(Tail);
-        _ -> {error, {binding_invalid, "Regex '~ts' is invalid", [RegexBin]}}
+
+% Regex validation
+is_regex_valid(<<>>) -> false;
+is_regex_valid(Regex) ->
+    case re:compile(Regex) of
+        {ok, _} -> true;
+        _ -> false
     end.
 
-validate_regexes([]) -> ok;
-validate_regexes([ {<< RuleKey:8/binary, _/binary >>, longstr, << RegexBin/binary >>} | Tail ]) when RuleKey==<<"x-?hkvre">> ; RuleKey==<<"x-addqre">> ; RuleKey==<<"x-delqre">> ->
-    validate_regexes_item(RegexBin, Tail);
-validate_regexes([ {<< RuleKey:9/binary, _/binary >>, longstr, << RegexBin/binary >>} | Tail ]) when RuleKey==<<"x-?hkv!re">> ; RuleKey==<<"x-addq!re">> ; RuleKey==<<"x-delq!re">> ->
-    validate_regexes_item(RegexBin, Tail);
-validate_regexes([ _ | Tail ]) ->
-        validate_regexes(Tail).
+validate_regex(Regex, Tail) ->
+    case is_regex_valid(Regex) of
+        true -> validate_op(Tail);
+        _ -> {error, {binding_invalid, "Invalid regex '~ts'", [Regex]}}
+    end.
+
+
 
 
 %% By default the binding type is 'all'; and that's it :)
@@ -1157,54 +1141,36 @@ is_match_hk_any([_ | BNext], HCur) ->
 
 
 
-topic_amqp_to_re(TopicStr) ->
-    topic_amqp_to_re([ $^ | erlang:binary_to_list(TopicStr)], 0).
-topic_amqp_to_reci(TopicStr) ->
-    topic_amqp_to_re([ "^(?i)" | erlang:binary_to_list(TopicStr)], 0).
+%% Transform AMQP topic to regex
+%%     Void topic will be treated as an error
+%% -----------------------------------------------------------------------------
+topic_amqp_to_re(<<>>) -> <<>>;
+topic_amqp_to_re(TopicBin) ->
+    topic_amqp_to_re2([ "^" | erlang:binary_to_list(TopicBin)]).
+topic_amqp_to_re_ci(<<>>) -> <<>>;
+topic_amqp_to_re_ci(TopicBin) ->
+    topic_amqp_to_re2([ "^(?i)" | erlang:binary_to_list(TopicBin)]).
 
-topic_amqp_to_re(TopicStr, 0) ->
-    NewTopicStr = string:replace(TopicStr, "*", "(\\w+)", all),
-    topic_amqp_to_re(NewTopicStr, 1);
-topic_amqp_to_re(TopicStr, 1) ->
-    NewTopicStr = string:replace(TopicStr, "#.", "(\\w+.)*"),
-    topic_amqp_to_re(NewTopicStr, 2);
-topic_amqp_to_re(TopicStr, 2) ->
-    NewTopicStr = string:replace(TopicStr, ".#", "(.\\w+)*"),
-    topic_amqp_to_re(NewTopicStr, 3);
-topic_amqp_to_re(TopicStr, 3) ->
-    NewTopicStr = string:replace(TopicStr, ".", "\\.", all),
-    topic_amqp_to_re(NewTopicStr, 4);
-topic_amqp_to_re(TopicStr, 4) ->
-    NewTopicStr = string:replace(TopicStr, "#", ".*"),
-    topic_amqp_to_re(NewTopicStr, 5);
-topic_amqp_to_re(TopicStr, 5) ->
-    lists:flatten([TopicStr, "$"]).
+topic_amqp_to_re2(Topic) ->
+    Topic1 = string:replace(Topic, "*", "(\\w+)", all),
+    Topic2 = string:replace(Topic1, "#.", "(\\w+.)*"),
+    Topic3 = string:replace(Topic2, ".#", "(.\\w+)*"),
+    Topic4 = string:replace(Topic3, ".", "\\.", all),
+    Topic5 = string:replace(Topic4, "#", ".*"),
+    list_to_binary(lists:flatten([Topic5, "$"])).
 
 
+%% Transform x-del-dest operator
+%% -----------------------------------------------------------------------------
+transform_x_del_dest(Args, Dest) -> transform_x_del_dest(Args, [], Dest).
 
-% This fun transforms some rule by some other
-rebuild_args(Args, Dest) -> rebuild_args(Args, [], Dest).
-
-rebuild_args([], Ret, _) -> Ret;
-rebuild_args([ {<<"x-del-dest">>, longstr, <<>>} | Tail ], Ret, Dest = #resource{kind = queue, name = RName} ) ->
-    rebuild_args(Tail, [ {<<"x-delq-ontrue">>, longstr, RName} | Ret], Dest);
-rebuild_args([ {<<"x-del-dest">>, longstr, <<>>} | Tail ], Ret, Dest = #resource{kind = exchange, name = RName} ) ->
-    rebuild_args(Tail, [ {<<"x-dele-ontrue">>, longstr, RName} | Ret], Dest);
-%% rkta
-rebuild_args([ {<<"x-?rkta">>, longstr, Topic} | Tail ], Ret, Dest) ->
-    ZZZ = topic_amqp_to_re(Topic),
-    rebuild_args(Tail, [ {<<"x-?rkre">>, longstr, erlang:list_to_binary(ZZZ)} | Ret], Dest);
-rebuild_args([ {<<"x-?rk!ta">>, longstr, Topic} | Tail ], Ret, Dest) ->
-    ZZZ = topic_amqp_to_re(Topic),
-    rebuild_args(Tail, [ {<<"x-?rk!re">>, longstr, erlang:list_to_binary(ZZZ)} | Ret], Dest);
-rebuild_args([ {<<"x-?rktaci">>, longstr, Topic} | Tail ], Ret, Dest) ->
-    ZZZ = topic_amqp_to_reci(Topic),
-    rebuild_args(Tail, [ {<<"x-?rkre">>, longstr, erlang:list_to_binary(ZZZ)} | Ret], Dest);
-rebuild_args([ {<<"x-?rk!taci">>, longstr, Topic} | Tail ], Ret, Dest) ->
-    ZZZ = topic_amqp_to_reci(Topic),
-    rebuild_args(Tail, [ {<<"x-?rk!re">>, longstr, erlang:list_to_binary(ZZZ)} | Ret], Dest);
-rebuild_args([ Op | Tail ], Ret, Dest) ->
-    rebuild_args(Tail, [ Op | Ret], Dest).
+transform_x_del_dest([], Ret, _) -> Ret;
+transform_x_del_dest([ {<<"x-del-dest">>, longstr, <<>>} | Tail ], Ret, Dest = #resource{kind = queue, name = RName} ) ->
+    transform_x_del_dest(Tail, [ {<<"x-delq-ontrue">>, longstr, RName} | Ret], Dest);
+transform_x_del_dest([ {<<"x-del-dest">>, longstr, <<>>} | Tail ], Ret, Dest = #resource{kind = exchange, name = RName} ) ->
+    transform_x_del_dest(Tail, [ {<<"x-dele-ontrue">>, longstr, RName} | Ret], Dest);
+transform_x_del_dest([ Op | Tail ], Ret, Dest) ->
+    transform_x_del_dest(Tail, [ Op | Ret], Dest).
 
 
 
@@ -1276,6 +1242,20 @@ get_match_rk_ops([ {<<"x-?rkre">>, _, <<V/binary>>} | Tail ], Res) ->
     get_match_rk_ops(Tail, [ {rkre, V} | Res]);
 get_match_rk_ops([ {<<"x-?rk!re">>, _, <<V/binary>>} | Tail ], Res) ->
     get_match_rk_ops(Tail, [ {rknre, V} | Res]);
+
+get_match_rk_ops([ {<<"x-?rkta">>, _, TopicBin} | Tail ], Res) ->
+    RegexBin = topic_amqp_to_re(TopicBin),
+    get_match_rk_ops(Tail, [ {rkre, RegexBin} | Res]);
+get_match_rk_ops([ {<<"x-?rk!ta">>, _, TopicBin} | Tail ], Res) ->
+    RegexBin = topic_amqp_to_re(TopicBin),
+    get_match_rk_ops(Tail, [ {rknre, RegexBin} | Res]);
+get_match_rk_ops([ {<<"x-?rktaci">>, _, TopicBin} | Tail ], Res) ->
+    RegexBin = topic_amqp_to_re_ci(TopicBin),
+    get_match_rk_ops(Tail, [ {rkre, RegexBin} | Res]);
+get_match_rk_ops([ {<<"x-?rk!taci">>, _, TopicBin} | Tail ], Res) ->
+    RegexBin = topic_amqp_to_re_ci(TopicBin),
+    get_match_rk_ops(Tail, [ {rknre, RegexBin} | Res]);
+
 get_match_rk_ops([ _ | Tail ], Result) ->
     get_match_rk_ops(Tail, Result).
 
@@ -1513,7 +1493,7 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     StopOperators = {SOT2, SOF2},
 
     << MsgDests:8, MsgDestsRE:8, MsgDestsOpt:8 >> = get_msg_ops(BindingArgs, << 0, 0, 0 >>),
-    FlattenedBindindArgs = flatten_table(rebuild_args(BindingArgs, Dest)),
+    FlattenedBindindArgs = flatten_table(transform_x_del_dest(BindingArgs, Dest)),
     MatchHKOps = get_match_hk_ops(FlattenedBindindArgs),
     MatchRKOps = get_match_rk_ops(FlattenedBindindArgs, []),
     MatchDTOps = get_match_dt_ops(FlattenedBindindArgs, []),
