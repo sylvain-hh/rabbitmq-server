@@ -104,16 +104,20 @@ route(#exchange{name = #resource{virtual_host = VHost} = Name},
             MsgContentSize = iolist_size(Content#content.payload_fragments_rev),
             case pre_check(Config, MsgContentSize) of
                 ok -> get_routes({RK, MsgProperties}, CurrentOrderedBindings, 1, ordsets:new());
-                Error -> Error
+                ErrorOrEmpty -> ErrorOrEmpty
             end
     end.
 
 
 pre_check([], _) -> ok;
-pre_check([{1, MinPlSize} | _], PlSize) when PlSize < MinPlSize ->
+pre_check([{1, {0, MinPlSize}} | _], PlSize) when PlSize < MinPlSize ->
     rabbit_misc:protocol_error(precondition_failed, "Min size payload hit.", []);
-pre_check([{2, MaxPlSize} | _], PlSize) when PlSize > MaxPlSize ->
+pre_check([{1, {1, MinPlSize}} | _], PlSize) when PlSize < MinPlSize ->
+    [];
+pre_check([{2, {0, MaxPlSize}} | _], PlSize) when PlSize > MaxPlSize ->
     rabbit_misc:protocol_error(precondition_failed, "Max size payload hit.", []);
+pre_check([{2, {1, MaxPlSize}} | _], PlSize) when PlSize > MaxPlSize ->
+    [];
 pre_check([_ | Tail], PlSize) ->
     pre_check(Tail, PlSize).
 
@@ -125,15 +129,15 @@ get_routes(_, [], _, ResDests) ->
 
 get_routes(MsgData, [ {_, BindingType, Dest, {HKRules, RKRules, DTRules, ATRules}, << 0 >>, _} | T ], _, ResDests) ->
     case is_match(BindingType, MsgData, HKRules, RKRules, DTRules, ATRules) of
-        true -> get_routes(MsgData, T, 0, ordsets:add_element(Dest, ResDests));
-           _ -> get_routes(MsgData, T, 0, ResDests)
+        true -> get_routes(MsgData, T, 1, ordsets:add_element(Dest, ResDests));
+           _ -> get_routes(MsgData, T, 1, ResDests)
     end;
 
 % Simplest like direct's exchange type
 get_routes(MsgData={MsgRK, _}, [ {_, BindingType, _, {HKRules, RKRules, DTRules, ATRules}, << 128 >>, _} | T ], _, ResDests) ->
     case is_match(BindingType, MsgData, HKRules, RKRules, DTRules, ATRules) of
-        true -> get_routes(MsgData, T, 0, ordsets:add_element(rabbit_misc:r(get(xopen_vhost), queue, MsgRK), ResDests));
-           _ -> get_routes(MsgData, T, 0, ResDests)
+        true -> get_routes(MsgData, T, 1, ordsets:add_element(rabbit_misc:r(get(xopen_vhost), queue, MsgRK), ResDests));
+           _ -> get_routes(MsgData, T, 1, ResDests)
     end;
 
 % Jump to the next binding satisfying the last goto operator
@@ -1069,7 +1073,7 @@ validate_op([ {Op, longstr, <<>>} | Tail ]) when
     validate_op(Tail);
 
 % Binding order
-validate_op([ {<<"x-order">>, _, V} | Tail ]) when is_integer(V) ->
+validate_op([ {<<"x-order">>, _, V} | Tail ]) when is_integer(V) andalso V > 0 ->
     IsSuperUser = is_super_user(),
     if
         IsSuperUser -> validate_op(Tail);
@@ -1078,7 +1082,7 @@ validate_op([ {<<"x-order">>, _, V} | Tail ]) when is_integer(V) ->
     end;
 
 % Gotos
-validate_op([ {<<"x-goto-on", BoolBin/binary>>, _, V} | Tail ]) when (BoolBin == <<"true">> orelse BoolBin == <<"false">>) andalso is_integer(V) ->
+validate_op([ {<<"x-goto-on", BoolBin/binary>>, _, V} | Tail ]) when (BoolBin == <<"true">> orelse BoolBin == <<"false">>) andalso is_integer(V) andalso V > 0 ->
     IsSuperUser = is_super_user(),
     if
         IsSuperUser -> validate_op(Tail);
@@ -1481,7 +1485,7 @@ is_super_user() ->
     false.
 
 
-create(transaction, #exchange{arguments = Args, name = #resource{virtual_host = VHost} = XName}) ->
+create(transaction, #exchange{arguments = Args, name = XName}) ->
     Config = get_exchange_config(Args),
     ExchConfig = {0, Config},
     InitRecord = #?RECORD{?RECKEY = XName, ?RECVALUE = [ExchConfig]},
@@ -1503,16 +1507,29 @@ get_exchange_config(Args) ->
     get_exchange_config(Args, []).
 
 get_exchange_config([], PList) -> PList;
-get_exchange_config([{<<"alternate-exchange">>, _, _} | Tail], PList) ->
-    get_exchange_config(Tail, PList);
 get_exchange_config([{<<"min-payload-size">>, long, I} | Tail], PList) ->
-    NewPList = [{1, I} | PList],
+    NewPList = [{1, {0, I}} | PList],
     get_exchange_config(Tail, NewPList);
+get_exchange_config([{<<"min-payload-size">>, _, _} | _], _) ->
+    rabbit_misc:protocol_error(precondition_failed, "Invalid exchange argument.", []);
+get_exchange_config([{<<"min-payload-size-silent">>, long, I} | Tail], PList) ->
+    NewPList = [{1, {1, I}} | PList],
+    get_exchange_config(Tail, NewPList);
+get_exchange_config([{<<"min-payload-size-silent">>, _, _} | _], _) ->
+    rabbit_misc:protocol_error(precondition_failed, "Invalid exchange argument.", []);
 get_exchange_config([{<<"max-payload-size">>, long, I} | Tail], PList) ->
-    NewPList = [{2, I} | PList],
+    NewPList = [{2, {0, I}} | PList],
     get_exchange_config(Tail, NewPList);
-get_exchange_config(_, _) ->
-    rabbit_misc:protocol_error(precondition_failed, "Invalid exchange argument.", []).
+get_exchange_config([{<<"max-payload-size">>, _, _} | _], _) ->
+    rabbit_misc:protocol_error(precondition_failed, "Invalid exchange argument.", []);
+get_exchange_config([{<<"max-payload-size-silent">>, long, I} | Tail], PList) ->
+    NewPList = [{2, {1, I}} | PList],
+    get_exchange_config(Tail, NewPList);
+get_exchange_config([{<<"max-payload-size-silent">>, _, _} | _], _) ->
+    rabbit_misc:protocol_error(precondition_failed, "Invalid exchange argument.", []);
+get_exchange_config([_ | Tail], PList) ->
+    get_exchange_config(Tail, PList).
+
 
 
 delete(transaction, #exchange{name = XName}, _) ->
@@ -1530,7 +1547,7 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
 
 % Branching operators and "super user" (goto and stop cannot be declared in same binding)
     BindingOrder = get_binding_order(BindingArgs, 10000),
-    {GOT, GOF} = get_goto_operators(BindingArgs, {0, 0}),
+    {GOT, GOF} = get_goto_operators(BindingArgs, {1, 1}),
     {SOT, SOF} = get_stop_operators(BindingArgs, {0, 0}),
     {GOT2, SOT2} = case (is_super_user() orelse SOT==0) of
         true -> {GOT, SOT};
@@ -1553,7 +1570,7 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     {Dests, DestsRE} = get_dests_operators(VHost, FlattenedBindindArgs, DefaultDests, ?DEFAULT_DESTS_RE),
     NewBinding1 = {BindingOrder, BindingType, Dest, MatchOps, << MsgDestsOpt:8 >>},
     NewBinding2 = case {GOT2, GOF2, StopOperators, Dests, DestsRE, << MsgDests:8, MsgDestsRE:8 >>} of
-        {0, 0, {0, 0}, DefaultDests, ?DEFAULT_DESTS_RE, <<0, 0>>} -> NewBinding1;
+        {1, 1, {0, 0}, DefaultDests, ?DEFAULT_DESTS_RE, <<0, 0>>} -> NewBinding1;
         {_, _, _, DefaultDests, ?DEFAULT_DESTS_RE, <<0, 0>>} -> erlang:append_element(NewBinding1, {GOT2, GOF2, StopOperators});
         _ -> erlang:append_element(NewBinding1, {GOT2, GOF2, StopOperators, Dests, DestsRE, << MsgDests:8, MsgDestsRE:8 >>})
     end,
@@ -1589,6 +1606,6 @@ remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,_,BId} | T], Res) ->
     end.
 
 
-assert_args_equivalence(X, Args) ->
-    rabbit_exchange:assert_args_equivalence(X, Args).
+assert_args_equivalence(#exchange{name = Name, arguments = Args}, RequiredArgs) ->
+    rabbit_misc:assert_args_equivalence(Args, RequiredArgs, Name, [<<"alternate-exchange">>, <<"min-payload-size">>, <<"max-payload-size">>]).
 
