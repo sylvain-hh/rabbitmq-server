@@ -96,13 +96,26 @@ route(#exchange{name = #resource{virtual_host = VHost} = Name},
         end
     },
 
-    CurrentOrderedBindings = case ets:lookup(?TABLE, Name) of
-        [] -> [];
-        [#?RECORD{?RECVALUE = Bs}] -> Bs
-    end,
-% TODO : Change goto 0 to 1, also in other get_routes..
-    get_routes({RK, MsgProperties}, CurrentOrderedBindings, 0, ordsets:new()).
+    [#?RECORD{?RECVALUE = [{0, Config} | CurrentOrderedBindings]}] = ets:lookup(?TABLE, Name),
 
+    case Config of
+        [] -> get_routes({RK, MsgProperties}, CurrentOrderedBindings, 1, ordsets:new());
+        _ ->
+            MsgContentSize = iolist_size(Content#content.payload_fragments_rev),
+            case pre_check(Config, MsgContentSize) of
+                ok -> get_routes({RK, MsgProperties}, CurrentOrderedBindings, 1, ordsets:new());
+                Error -> Error
+            end
+    end.
+
+
+pre_check([], _) -> ok;
+pre_check([{1, MinPlSize} | _], PlSize) when PlSize < MinPlSize ->
+    rabbit_misc:protocol_error(precondition_failed, "Min size payload hit.", []);
+pre_check([{2, MaxPlSize} | _], PlSize) when PlSize > MaxPlSize ->
+    rabbit_misc:protocol_error(precondition_failed, "Max size payload hit.", []);
+pre_check([_ | Tail], PlSize) ->
+    pre_check(Tail, PlSize).
 
 
 %% Get routes
@@ -1468,9 +1481,39 @@ is_super_user() ->
     false.
 
 
+create(transaction, #exchange{arguments = Args, name = #resource{virtual_host = VHost} = XName}) ->
+    Config = get_exchange_config(Args),
+    ExchConfig = {0, Config},
+    InitRecord = #?RECORD{?RECKEY = XName, ?RECVALUE = [ExchConfig]},
+    ok = mnesia:write(?TABLE, InitRecord, write);
+create(_, _) -> ok.
 
-validate(_X) -> ok.
-create(_Tx, _X) -> ok.
+
+validate(#exchange{arguments = Args}) ->
+    Config = get_exchange_config(Args),
+    val_exchange_config(Config).
+
+val_exchange_config(PList) when is_list(PList) ->
+    ok;
+val_exchange_config(Error) ->
+    Error.
+
+
+get_exchange_config(Args) ->
+    get_exchange_config(Args, []).
+
+get_exchange_config([], PList) -> PList;
+get_exchange_config([{<<"alternate-exchange">>, _, _} | Tail], PList) ->
+    get_exchange_config(Tail, PList);
+get_exchange_config([{<<"min-payload-size">>, long, I} | Tail], PList) ->
+    NewPList = [{1, I} | PList],
+    get_exchange_config(Tail, NewPList);
+get_exchange_config([{<<"max-payload-size">>, long, I} | Tail], PList) ->
+    NewPList = [{2, I} | PList],
+    get_exchange_config(Tail, NewPList);
+get_exchange_config(_, _) ->
+    rabbit_misc:protocol_error(precondition_failed, "Invalid exchange argument.", []).
+
 
 delete(transaction, #exchange{name = XName}, _) ->
     ok = mnesia:delete (?TABLE, XName, write);
@@ -1508,10 +1551,6 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
     MatchOps = {MatchHKOps, MatchRKOps, MatchDTOps, MatchATOps},
     DefaultDests = {ordsets:new(), ordsets:new(), ordsets:new(), ordsets:new()},
     {Dests, DestsRE} = get_dests_operators(VHost, FlattenedBindindArgs, DefaultDests, ?DEFAULT_DESTS_RE),
-    CurrentOrderedBindings = case mnesia:read(?TABLE, XName, write) of
-        [] -> [];
-        [#?RECORD{?RECVALUE = E}] -> E
-    end,
     NewBinding1 = {BindingOrder, BindingType, Dest, MatchOps, << MsgDestsOpt:8 >>},
     NewBinding2 = case {GOT2, GOF2, StopOperators, Dests, DestsRE, << MsgDests:8, MsgDestsRE:8 >>} of
         {0, 0, {0, 0}, DefaultDests, ?DEFAULT_DESTS_RE, <<0, 0>>} -> NewBinding1;
@@ -1519,6 +1558,7 @@ add_binding(transaction, #exchange{name = #resource{virtual_host = VHost} = XNam
         _ -> erlang:append_element(NewBinding1, {GOT2, GOF2, StopOperators, Dests, DestsRE, << MsgDests:8, MsgDestsRE:8 >>})
     end,
     NewBinding = erlang:append_element(NewBinding2, BindingId),
+    [#?RECORD{?RECVALUE = CurrentOrderedBindings}] = mnesia:read(?TABLE, XName, write),
     NewBindings = lists:keysort(1, [NewBinding | CurrentOrderedBindings]),
     NewRecord = #?RECORD{?RECKEY = XName, ?RECVALUE = NewBindings},
     ok = mnesia:write(?TABLE, NewRecord, write);
@@ -1527,13 +1567,10 @@ add_binding(_, _, _) ->
 
 
 remove_bindings(transaction, #exchange{name = XName}, BindingsToDelete) ->
-    CurrentOrderedBindings = case mnesia:read(?TABLE, XName, write) of
-        [] -> [];
-        [#?RECORD{?RECVALUE = E}] -> E
-    end,
     BindingIdsToDelete = [crypto:hash(md5, term_to_binary(B)) || B <- BindingsToDelete],
+    [#?RECORD{?RECVALUE = [ExchConfig | CurrentOrderedBindings]}] = mnesia:read(?TABLE, XName, write),
     NewOrderedBindings = remove_bindings_ids(BindingIdsToDelete, CurrentOrderedBindings, []),
-    NewRecord = #?RECORD{?RECKEY = XName, ?RECVALUE = NewOrderedBindings},
+    NewRecord = #?RECORD{?RECKEY = XName, ?RECVALUE = [ExchConfig | NewOrderedBindings]},
     ok = mnesia:write(?TABLE, NewRecord, write);
 remove_bindings(_, _, _) ->
     ok.
