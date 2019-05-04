@@ -102,24 +102,62 @@ route(#exchange{name = #resource{virtual_host = VHost} = Name},
         [] -> get_routes({RK, MsgProperties}, CurrentOrderedBindings, 1, ordsets:new());
         _ ->
             MsgContentSize = iolist_size(Content#content.payload_fragments_rev),
-            case pre_check(Config, MsgContentSize) of
+            case pre_check(Config, MsgContentSize, MsgProperties#'P_basic'.headers) of
                 ok -> get_routes({RK, MsgProperties}, CurrentOrderedBindings, 1, ordsets:new());
-                ErrorOrEmpty -> ErrorOrEmpty
+                _ -> []
             end
     end.
 
 
-pre_check([], _) -> ok;
-pre_check([{1, {0, MinPlSize}} | _], PlSize) when PlSize < MinPlSize ->
+pre_check([], _, _) -> ok;
+pre_check([{1, {0, MinPlSize}} | _], PlSize, _) when PlSize < MinPlSize ->
     rabbit_misc:protocol_error(precondition_failed, "Min size payload hit.", []);
-pre_check([{1, {1, MinPlSize}} | _], PlSize) when PlSize < MinPlSize ->
-    [];
-pre_check([{2, {0, MaxPlSize}} | _], PlSize) when PlSize > MaxPlSize ->
+pre_check([{1, {1, MinPlSize}} | _], PlSize, _) when PlSize < MinPlSize -> ko;
+pre_check([{2, {0, MaxPlSize}} | _], PlSize, _) when PlSize > MaxPlSize ->
     rabbit_misc:protocol_error(precondition_failed, "Max size payload hit.", []);
-pre_check([{2, {1, MaxPlSize}} | _], PlSize) when PlSize > MaxPlSize ->
-    [];
-pre_check([_ | Tail], PlSize) ->
-    pre_check(Tail, PlSize).
+pre_check([{2, {1, MaxPlSize}} | _], PlSize, _) when PlSize > MaxPlSize -> ko;
+pre_check([{3, {MaxHdsArrDepth, MaxHdsSize}} | _], _, Headers) ->
+    check_headers_size(Headers, MaxHdsArrDepth, MaxHdsSize);
+pre_check([_ | Tail], PlSize, Headers) ->
+    pre_check(Tail, PlSize, Headers).
+
+
+check_headers_size(Hs, MaxArrDepth, MaxSize) ->
+    check_headers_size(Hs, MaxArrDepth, 0, MaxSize, 0).
+
+check_headers_size(_, MaxArrDepth, ArrDepth, _, _) when ArrDepth > MaxArrDepth ->
+    rabbit_misc:protocol_error(precondition_failed, "Max headers depth hit.", []);
+check_headers_size(_, _, _, MaxSize, Size) when Size > MaxSize ->
+    rabbit_misc:protocol_error(precondition_failed, "Max headers size hit.", []);
+check_headers_size([], _, _, _, _) -> ok;
+% arbitrarily, size of an array is 10 : why not ?!
+% array of first level (argument has a Key)
+check_headers_size([{<< Key/binary >>, array, Arr} | Tail], MaxArrDepth, 0, MaxSize, Size) ->
+    KeySize = byte_size(Key),
+    NewTail = lists:append([Arr, Tail]),
+    check_headers_size(NewTail, MaxArrDepth, 1, MaxSize, Size + KeySize + 10);
+% count the key name size only
+check_headers_size([{<< Key/binary >>, _, V} | Tail], MaxArrDepth, ArrDepth, MaxSize, Size) ->
+    KeySize = byte_size(Key),
+    check_headers_size([{nil, V} | Tail], MaxArrDepth, ArrDepth, MaxSize, Size + KeySize);
+check_headers_size([{array, Arr} | Tail], MaxArrDepth, ArrDepth, MaxSize, Size) ->
+    NewTail = lists:append([Arr, Tail]),
+    check_headers_size(NewTail, MaxArrDepth, ArrDepth + 1, MaxSize, Size + 10);
+% arbitrarily, size of a number is 4
+check_headers_size([{_, N} | Tail], MaxArrDepth, ArrDepth, MaxSize, Size) when is_number(N) ->
+    check_headers_size(Tail, MaxArrDepth, ArrDepth, MaxSize, Size + 4);
+% size of a binary can be computed
+check_headers_size([{_, << Bin/binary >>} | Tail], MaxArrDepth, ArrDepth, MaxSize, Size) ->
+    ValSize = byte_size(Bin),
+    check_headers_size(Tail, MaxArrDepth, ArrDepth, MaxSize, Size + ValSize);
+% size of a list can be computed
+check_headers_size([{_, L} | Tail], MaxArrDepth, ArrDepth, MaxSize, Size) when is_list(L) ->
+    ValSize = length(L),
+    check_headers_size(Tail, MaxArrDepth, ArrDepth, MaxSize, Size + ValSize);
+% should be only for bool : arbitrarily, size of a bool is 1
+check_headers_size([{_, _} | Tail], MaxArrDepth, ArrDepth, MaxSize, Size) ->
+    check_headers_size(Tail, MaxArrDepth, ArrDepth, MaxSize, Size + 1).
+
 
 
 %% Get routes
@@ -1494,13 +1532,8 @@ create(_, _) -> ok.
 
 
 validate(#exchange{arguments = Args}) ->
-    Config = get_exchange_config(Args),
-    val_exchange_config(Config).
-
-val_exchange_config(PList) when is_list(PList) ->
-    ok;
-val_exchange_config(Error) ->
-    Error.
+    get_exchange_config(Args),
+    ok.
 
 
 get_exchange_config(Args) ->
@@ -1527,6 +1560,26 @@ get_exchange_config([{<<"max-payload-size-silent">>, long, I} | Tail], PList) ->
     get_exchange_config(Tail, NewPList);
 get_exchange_config([{<<"max-payload-size-silent">>, _, _} | _], _) ->
     rabbit_misc:protocol_error(precondition_failed, "Invalid exchange argument.", []);
+
+get_exchange_config([{<<"max-headers-depth">>, long, I} | Tail], PList) ->
+    MaxH = case proplists:get_value(3, PList) of
+        undefined -> {I, 16384};
+        {_, MaxSize} -> {I, MaxSize}
+    end,
+    NewPList = [{3, MaxH} | PList],
+    get_exchange_config(Tail, NewPList);
+get_exchange_config([{<<"max-headers-depth">>, _, _} | _], _) ->
+    rabbit_misc:protocol_error(precondition_failed, "Invalid exchange argument.", []);
+get_exchange_config([{<<"max-headers-size">>, long, I} | Tail], PList) ->
+    MaxH = case proplists:get_value(3, PList) of
+        undefined -> {2, I};
+        {MaxDepth, _} -> {MaxDepth, I}
+    end,
+    NewPList = [{3, MaxH} | PList],
+    get_exchange_config(Tail, NewPList);
+get_exchange_config([{<<"max-headers-size">>, _, _} | _], _) ->
+    rabbit_misc:protocol_error(precondition_failed, "Invalid exchange argument.", []);
+
 get_exchange_config([_ | Tail], PList) ->
     get_exchange_config(Tail, PList).
 
