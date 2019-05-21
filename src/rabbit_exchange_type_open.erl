@@ -1660,5 +1660,5 @@ remove_bindings_ids(BindingIdsToDelete, [Bind = {_,_,_,_,_,BId} | T], Res) ->
 
 
 assert_args_equivalence(#exchange{name = Name, arguments = Args}, RequiredArgs) ->
-    rabbit_misc:assert_args_equivalence(Args, RequiredArgs, Name, [<<"alternate-exchange">>, <<"min-payload-size">>, <<"max-payload-size">>]).
+    rabbit_misc:assert_args_equivalence(Args, RequiredArgs, Name, [<<"alternate-exchange">>, <<"min-payload-size">>, <<"max-payload-size">>, <<"min-payload-size-silent">>, <<"max-payload-size-silent">>, <<"max-headers-depth">>, <<"max-headers-size">>]).
 
