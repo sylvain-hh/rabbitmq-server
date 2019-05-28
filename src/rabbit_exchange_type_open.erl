@@ -756,6 +756,9 @@ is_match_rk_any([ _ | Tail], RK) ->
 %% -----------------------------------------------------------------------------
 is_match_hk(0, Args, Headers) ->
     is_match_hk_any(Args, Headers);
+% set0
+is_match_hk(2, Args, Headers) ->
+    is_match_hk_set(Args, Headers, true);
 % set : default is false as one header at least must match
 is_match_hk(3, Args, Headers) ->
     is_match_hk_set(Args, Headers, false);
@@ -781,7 +784,7 @@ is_match_hk_ase(_, _, []) -> false;
 
 % Current header key not in match operators; go next header with current match operator
 %  With eq return false
-is_match_hk_ase(4, BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
+is_match_hk_ase(4, [{BK, _, _} | _], [{HK, _, _} | _])
     when BK > HK -> false;
 is_match_hk_ase(BT, BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
     when BK > HK -> is_match_hk_ase(BT, BCur, HNext);
@@ -801,9 +804,9 @@ is_match_hk_ase(_, [{BK, _, _} | _], [{HK, _, _} | _])
 is_match_hk_ase(BT, [{_, eq, BV} | BNext], [{_, _, HV} | HNext])
     when BV == HV -> is_match_hk_ase(BT, BNext, HNext);
 % Current values must match but do not match; return false
-is_match_hk_ase(BT, [{_, eq, _} | _], _) -> false;
+is_match_hk_ase(_, [{_, eq, _} | _], _) -> false;
 % Key must not exist, return false
-is_match_hk_ase(BT, [{_, nx, _} | _], _) -> false;
+is_match_hk_ase(_, [{_, nx, _} | _], _) -> false;
 % Current header key must exist; ok go next
 is_match_hk_ase(BT, [{_, ex, _} | BNext], [ _ | HNext]) ->
     is_match_hk_ase(BT, BNext, HNext);
@@ -844,21 +847,21 @@ is_match_hk_ase(BT, [{_, nin, _} | BNext], [{_, _, HV} | HNext]) ->
 % <= < != > >=
 is_match_hk_ase(BT, [{_, ne, BV} | BNext], HCur = [{_, _, HV} | _])
     when BV /= HV -> is_match_hk_ase(BT, BNext, HCur);
-is_match_hk_ase(BT, [{_, ne, _} | _], _) -> false;
+is_match_hk_ase(_, [{_, ne, _} | _], _) -> false;
 
 % Thanks to validation done upstream, gt/ge/lt/le are done only for numeric
 is_match_hk_ase(BT, [{_, gt, BV} | BNext], HCur = [{_, _, HV} | _])
     when is_number(HV), HV > BV -> is_match_hk_ase(BT, BNext, HCur);
-is_match_hk_ase(BT, [{_, gt, _} | _], _) -> false;
+is_match_hk_ase(_, [{_, gt, _} | _], _) -> false;
 is_match_hk_ase(BT, [{_, ge, BV} | BNext], HCur = [{_, _, HV} | _])
     when is_number(HV), HV >= BV -> is_match_hk_ase(BT, BNext, HCur);
-is_match_hk_ase(BT, [{_, ge, _} | _], _) -> false;
+is_match_hk_ase(_, [{_, ge, _} | _], _) -> false;
 is_match_hk_ase(BT, [{_, lt, BV} | BNext], HCur = [{_, _, HV} | _])
     when is_number(HV), HV < BV -> is_match_hk_ase(BT, BNext, HCur);
-is_match_hk_ase(BT, [{_, lt, _} | _], _) -> false;
+is_match_hk_ase(_, [{_, lt, _} | _], _) -> false;
 is_match_hk_ase(BT, [{_, le, BV} | BNext], HCur = [{_, _, HV} | _])
     when is_number(HV), HV =< BV -> is_match_hk_ase(BT, BNext, HCur);
-is_match_hk_ase(BT, [{_, le, _} | _], _) -> false;
+is_match_hk_ase(_, [{_, le, _} | _], _) -> false;
 
 % Regexes
 is_match_hk_ase(BT, [{_, re, BV} | BNext], HCur = [{_, longstr, HV} | _]) ->
@@ -866,13 +869,13 @@ is_match_hk_ase(BT, [{_, re, BV} | BNext], HCur = [{_, longstr, HV} | _]) ->
         match -> is_match_hk_ase(BT, BNext, HCur);
         _ -> false
     end;
-is_match_hk_ase(BT, [{_, re, _} | _], _) -> false;
+is_match_hk_ase(_, [{_, re, _} | _], _) -> false;
 is_match_hk_ase(BT, [{_, nre, BV} | BNext], HCur = [{_, longstr, HV} | _]) ->
     case re:run(HV, BV, [ {capture, none} ]) of
         nomatch -> is_match_hk_ase(BT, BNext, HCur);
         _ -> false
     end;
-is_match_hk_ase(BT, [{_, nre, _} | _], _) -> false.
+is_match_hk_ase(_, [{_, nre, _} | _], _) -> false.
 
 
 % set0 and set
