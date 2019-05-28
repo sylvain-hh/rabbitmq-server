@@ -76,6 +76,7 @@ validate_binding(_X, #binding{args = Args, key = << >>, destination = Dest}) ->
         {longstr, <<"any">>} -> validate_list_type_usage(any, Args2);
         undefined            -> validate_list_type_usage(all, Args2);
         {longstr, <<"all">>} -> validate_list_type_usage(all, Args2);
+        {longstr, <<"set0">>} -> validate_list_type_usage(all, Args2);
         {longstr, <<"set">>} -> validate_list_type_usage(all, Args2);
         {longstr, <<"eq">>} -> validate_list_type_usage(all, Args2);
         _ -> {error, {binding_invalid, "Invalid x-match operator", []}}
@@ -482,6 +483,17 @@ pack_msg_ops([ {K, _, V} | Tail ], VHost, Dests, DestsRE) ->
 % Optimization for headers only..
 is_match(0, {_, MsgProps}, HKRules, [], [], []) ->
     is_match_hk_any(HKRules, MsgProps#'P_basic'.headers);
+is_match(1, {_, MsgProps}, HKRules, [], [], []) ->
+    is_match_hk_ase(1, HKRules, MsgProps#'P_basic'.headers);
+% Binding types set and set0 never routes message with no header
+is_match(BT, {_, #'P_basic'{headers = []}}, _, _, _, _) when BT == 2; BT == 3 ->
+    false;
+% set0
+is_match(2, {_, MsgProps}, HKRules, [], [], []) ->
+    is_match_hk_set(HKRules, MsgProps#'P_basic'.headers, true);
+% set
+is_match(3, {_, MsgProps}, HKRules, [], [], []) ->
+    is_match_hk_set(HKRules, MsgProps#'P_basic'.headers, false);
 is_match(BT, {_, MsgProps}, HKRules, [], [], []) ->
     is_match_hk_ase(BT, HKRules, MsgProps#'P_basic'.headers);
 
@@ -744,29 +756,32 @@ is_match_rk_any([ _ | Tail], RK) ->
 %% -----------------------------------------------------------------------------
 is_match_hk(0, Args, Headers) ->
     is_match_hk_any(Args, Headers);
+% set : default is false as one header at least must match
+is_match_hk(3, Args, Headers) ->
+    is_match_hk_set(Args, Headers, false);
 is_match_hk(BT, Args, Headers) ->
     is_match_hk_ase(BT, Args, Headers).
 
-% all
+% all, set0 and eq
 % --------------------------------------
-% No more match operator to check with all and set; return true
-is_match_hk_ase(BT, [], _) when BT==1; BT==2 -> true;
+% No more match operator to check with all and sets; return true
+is_match_hk_ase(BT, [], _) when BT==1; BT==2; BT==3 -> true;
 % With eq, return false if there are still some header keys
-is_match_hk_ase(3, [], [_ | _]) -> false;
-is_match_hk_ase(3, [], []) -> true;
+is_match_hk_ase(4, [], [_ | _]) -> false;
+is_match_hk_ase(4, [], []) -> true;
 
 % Purge nx op on no data as all these are true
 is_match_hk_ase(BT, [{_, nx, _} | BNext], []) ->
     is_match_hk_ase(BT, BNext, []);
 
 % No more message header but still match operator to check other than nx
-%  With set, return true else return false
+%  With set0, return true else return false
 is_match_hk_ase(2, _, []) -> true;
 is_match_hk_ase(_, _, []) -> false;
 
 % Current header key not in match operators; go next header with current match operator
 %  With eq return false
-is_match_hk_ase(3, BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
+is_match_hk_ase(4, BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
     when BK > HK -> false;
 is_match_hk_ase(BT, BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
     when BK > HK -> is_match_hk_ase(BT, BCur, HNext);
@@ -774,7 +789,7 @@ is_match_hk_ase(BT, BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
 is_match_hk_ase(BT, [{BK, nx, _} | BNext], HCur = [{HK, _, _} | _])
     when BK < HK -> is_match_hk_ase(BT, BNext, HCur);
 % Current match operator does not exist in message
-%  With set, go next else return false
+%  With set0, go next else return false
 is_match_hk_ase(2, [{BK, _, _} | NextBs], Hs = [{HK, _, _} | _])
     when BK < HK -> is_match_hk_ase(2, NextBs, Hs);
 is_match_hk_ase(_, [{BK, _, _} | _], [{HK, _, _} | _])
@@ -858,6 +873,109 @@ is_match_hk_ase(BT, [{_, nre, BV} | BNext], HCur = [{_, longstr, HV} | _]) ->
         _ -> false
     end;
 is_match_hk_ase(BT, [{_, nre, _} | _], _) -> false.
+
+
+% set0 and set
+% --------------------------------------
+% No more match operator to check; return result
+is_match_hk_set([], _, Res) -> Res;
+
+% Purge nx op on no data as all these are true
+is_match_hk_set([{_, nx, _} | BNext], [], Res) ->
+    is_match_hk_set(BNext, [], Res);
+
+% No more message header but still match operator to check other than nx
+is_match_hk_set(_, [], Res) -> Res;
+
+% Current header key not in match operators; go next header with current match operator
+is_match_hk_set(BCur = [{BK, _, _} | _], [{HK, _, _} | HNext], Res)
+    when BK > HK -> is_match_hk_set(BCur, HNext, Res);
+% Current binding key must not exist in data, go next binding
+is_match_hk_set([{BK, nx, _} | BNext], HCur = [{HK, _, _} | _], _)
+    when BK < HK -> is_match_hk_set(BNext, HCur, true);
+% Current match operator does not exist in message, go next
+is_match_hk_set([{BK, _, _} | NextBs], Hs = [{HK, _, _} | _], Res)
+    when BK < HK -> is_match_hk_set(NextBs, Hs, Res);
+%
+% From here, BK == HK (keys are the same)
+%
+% Current values must match and do match; ok go next
+is_match_hk_set([{_, eq, BV} | BNext], [{_, _, HV} | HNext], _)
+    when BV == HV -> is_match_hk_set(BNext, HNext, true);
+% Current values must match but do not match; return false
+is_match_hk_set([{_, eq, _} | _], _, _) -> false;
+% Key must not exist, return false
+is_match_hk_set([{_, nx, _} | _], _, _) -> false;
+% Current header key must exist; ok go next
+is_match_hk_set([{_, ex, _} | BNext], [ _ | HNext], _) ->
+    is_match_hk_set(BNext, HNext, true);
+
+%  .. with type checking
+is_match_hk_set([{_, is, _} | BNext], [{_, Type, _} | HNext], _) ->
+    case Type of
+        longstr -> is_match_hk_set(BNext, HNext, true);
+        _ -> false
+    end;
+is_match_hk_set([{_, ib, _} | BNext], [{_, Type, _} | HNext], _) ->
+    case Type of
+        bool -> is_match_hk_set(BNext, HNext, true);
+        _ -> false
+    end;
+is_match_hk_set([{_, in, _} | BNext], [{_, _, HV} | HNext], _) ->
+    case is_number(HV) of
+        true -> is_match_hk_set(BNext, HNext, true);
+        _ -> false
+    end;
+
+is_match_hk_set([{_, nis, _} | BNext], [{_, Type, _} | HNext], _) ->
+    case Type of
+        longstr -> false;
+        _ -> is_match_hk_set(BNext, HNext, true)
+    end;
+is_match_hk_set([{_, nib, _} | BNext], [{_, Type, _} | HNext], _) ->
+    case Type of
+        bool -> false;
+        _ -> is_match_hk_set(BNext, HNext, true)
+    end;
+is_match_hk_set([{_, nin, _} | BNext], [{_, _, HV} | HNext], _) ->
+    case is_number(HV) of
+        true -> false;
+        _ -> is_match_hk_set(BNext, HNext, true)
+    end;
+
+% <= < != > >=
+is_match_hk_set([{_, ne, BV} | BNext], HCur = [{_, _, HV} | _], _)
+    when BV /= HV -> is_match_hk_set(BNext, HCur, true);
+is_match_hk_set([{_, ne, _} | _], _, _) -> false;
+
+% Thanks to validation done upstream, gt/ge/lt/le are done only for numeric
+is_match_hk_set([{_, gt, BV} | BNext], HCur = [{_, _, HV} | _], _)
+    when is_number(HV), HV > BV -> is_match_hk_set(BNext, HCur, true);
+is_match_hk_set([{_, gt, _} | _], _, _) -> false;
+is_match_hk_set([{_, ge, BV} | BNext], HCur = [{_, _, HV} | _], _)
+    when is_number(HV), HV >= BV -> is_match_hk_set(BNext, HCur, true);
+is_match_hk_set([{_, ge, _} | _], _, _) -> false;
+is_match_hk_set([{_, lt, BV} | BNext], HCur = [{_, _, HV} | _], _)
+    when is_number(HV), HV < BV -> is_match_hk_set(BNext, HCur, true);
+is_match_hk_set([{_, lt, _} | _], _, _) -> false;
+is_match_hk_set([{_, le, BV} | BNext], HCur = [{_, _, HV} | _], _)
+    when is_number(HV), HV =< BV -> is_match_hk_set(BNext, HCur, true);
+is_match_hk_set([{_, le, _} | _], _, _) -> false;
+
+% Regexes
+is_match_hk_set([{_, re, BV} | BNext], HCur = [{_, longstr, HV} | _], _) ->
+    case re:run(HV, BV, [ {capture, none} ]) of
+        match -> is_match_hk_set(BNext, HCur, true);
+        _ -> false
+    end;
+is_match_hk_set([{_, re, _} | _], _, _) -> false;
+is_match_hk_set([{_, nre, BV} | BNext], HCur = [{_, longstr, HV} | _], _) ->
+    case re:run(HV, BV, [ {capture, none} ]) of
+        nomatch -> is_match_hk_set(BNext, HCur, true);
+        _ -> false
+    end;
+is_match_hk_set([{_, nre, _} | _], _, _) -> false.
+
 
 % any
 % --------------------------------------
@@ -1209,8 +1327,9 @@ is_regex_valid(Regex) ->
 %% By default the binding type is 'all'; and that's it :)
 parse_x_match({_, <<"any">>}) -> 0;
 parse_x_match({_, <<"all">>}) -> 1;
-parse_x_match({_, <<"set">>}) -> 2;
-parse_x_match({_, <<"eq">>})  -> 3;
+parse_x_match({_, <<"set0">>}) -> 2;
+parse_x_match({_, <<"set">>}) -> 3;
+parse_x_match({_, <<"eq">>})  -> 4;
 parse_x_match(_)              -> 1.
 
 %% Transform AMQP topic to regex
