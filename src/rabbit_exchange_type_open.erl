@@ -822,8 +822,18 @@ is_match_hk_ase(BT, [{_, ib, _} | BNext], [{_, Type, _} | HNext]) ->
         bool -> is_match_hk_ase(BT, BNext, HNext);
         _ -> false
     end;
+is_match_hk_ase(BT, [{_, ii, _} | BNext], [{_, _, HV} | HNext]) ->
+    case is_integer(HV) of
+        true -> is_match_hk_ase(BT, BNext, HNext);
+        _ -> false
+    end;
 is_match_hk_ase(BT, [{_, in, _} | BNext], [{_, _, HV} | HNext]) ->
     case is_number(HV) of
+        true -> is_match_hk_ase(BT, BNext, HNext);
+        _ -> false
+    end;
+is_match_hk_ase(BT, [{_, ia, _} | BNext], [{_, Type, _} | HNext]) ->
+    case Type == array of
         true -> is_match_hk_ase(BT, BNext, HNext);
         _ -> false
     end;
@@ -838,8 +848,18 @@ is_match_hk_ase(BT, [{_, nib, _} | BNext], [{_, Type, _} | HNext]) ->
         bool -> false;
         _ -> is_match_hk_ase(BT, BNext, HNext)
     end;
+is_match_hk_ase(BT, [{_, nii, _} | BNext], [{_, _, HV} | HNext]) ->
+    case is_integer(HV) of
+        true -> false;
+        _ -> is_match_hk_ase(BT, BNext, HNext)
+    end;
 is_match_hk_ase(BT, [{_, nin, _} | BNext], [{_, _, HV} | HNext]) ->
     case is_number(HV) of
+        true -> false;
+        _ -> is_match_hk_ase(BT, BNext, HNext)
+    end;
+is_match_hk_ase(BT, [{_, nia, _} | BNext], [{_, Type, _} | HNext]) ->
+    case Type == array of
         true -> false;
         _ -> is_match_hk_ase(BT, BNext, HNext)
     end;
@@ -924,8 +944,18 @@ is_match_hk_set([{_, ib, _} | BNext], [{_, Type, _} | HNext], _) ->
         bool -> is_match_hk_set(BNext, HNext, true);
         _ -> false
     end;
+is_match_hk_set([{_, ii, _} | BNext], [{_, _, HV} | HNext], _) ->
+    case is_integer(HV) of
+        true -> is_match_hk_set(BNext, HNext, true);
+        _ -> false
+    end;
 is_match_hk_set([{_, in, _} | BNext], [{_, _, HV} | HNext], _) ->
     case is_number(HV) of
+        true -> is_match_hk_set(BNext, HNext, true);
+        _ -> false
+    end;
+is_match_hk_set([{_, ia, _} | BNext], [{_, Type, _} | HNext], _) ->
+    case Type == array of
         true -> is_match_hk_set(BNext, HNext, true);
         _ -> false
     end;
@@ -940,8 +970,18 @@ is_match_hk_set([{_, nib, _} | BNext], [{_, Type, _} | HNext], _) ->
         bool -> false;
         _ -> is_match_hk_set(BNext, HNext, true)
     end;
+is_match_hk_set([{_, nii, _} | BNext], [{_, _, HV} | HNext], _) ->
+    case is_integer(HV) of
+        true -> false;
+        _ -> is_match_hk_set(BNext, HNext, true)
+    end;
 is_match_hk_set([{_, nin, _} | BNext], [{_, _, HV} | HNext], _) ->
     case is_number(HV) of
+        true -> false;
+        _ -> is_match_hk_set(BNext, HNext, true)
+    end;
+is_match_hk_set([{_, nia, _} | BNext], [{_, Type, _} | HNext], _) ->
+    case Type == array of
         true -> false;
         _ -> is_match_hk_set(BNext, HNext, true)
     end;
@@ -1016,8 +1056,18 @@ is_match_hk_any([{_, ib, _} | BNext], HCur = [{_, Type, _} | _]) ->
         bool -> true;
         _ -> is_match_hk_any(BNext, HCur)
     end;
+is_match_hk_any([{_, ii, _} | BNext], HCur = [{_, _, HV} | _]) ->
+    case is_integer(HV) of
+        true -> true;
+        _ -> is_match_hk_any(BNext, HCur)
+    end;
 is_match_hk_any([{_, in, _} | BNext], HCur = [{_, _, HV} | _]) ->
     case is_number(HV) of
+        true -> true;
+        _ -> is_match_hk_any(BNext, HCur)
+    end;
+is_match_hk_any([{_, ia, _} | BNext], HCur = [{_, Type, _} | _]) ->
+    case Type == array of
         true -> true;
         _ -> is_match_hk_any(BNext, HCur)
     end;
@@ -1032,8 +1082,18 @@ is_match_hk_any([{_, nib, _} | BNext], HCur = [{_, Type, _} | _]) ->
         bool -> is_match_hk_any(BNext, HCur);
         _ -> true
     end;
+is_match_hk_any([{_, nii, _} | BNext], HCur = [{_, _, HV} | _]) ->
+    case is_integer(HV) of
+        true -> is_match_hk_any(BNext, HCur);
+        _ -> true
+    end;
 is_match_hk_any([{_, nin, _} | BNext], HCur = [{_, _, HV} | _]) ->
     case is_number(HV) of
+        true -> is_match_hk_any(BNext, HCur);
+        _ -> true
+    end;
+is_match_hk_any([{_, nia, _} | BNext], HCur = [{_, Type, _} | _]) ->
+    case Type == array of
         true -> is_match_hk_any(BNext, HCur);
         _ -> true
     end;
@@ -1271,7 +1331,9 @@ validate_op([ {<<"x-stop-onfalse">>, longstr, <<>>} | Tail ]) ->
 validate_op([ {Op, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ]) when
         (Op==<<"x-?hkex">> orelse Op==<<"x-?hkexs">> orelse Op==<<"x-?hkexn">> orelse
          Op==<<"x-?hkexb">> orelse Op==<<"x-?hkex!s">> orelse Op==<<"x-?hkex!n">> orelse
-         Op==<<"x-?hkex!b">> orelse Op==<<"x-?hk!ex">>
+         Op==<<"x-?hkex!b">> orelse Op==<<"x-?hk!ex">> orelse
+         Op==<<"x-?hkexi">> orelse Op==<<"x-?hkex!i">> orelse
+         Op==<<"x-?hkexa">> orelse Op==<<"x-?hkex!a">>
         ) ->
     validate_op(Tail);
 
@@ -1386,6 +1448,10 @@ get_match_hk_ops([ {<<"x-?hkex">>, _, K} | Tail ], Res) ->
 % Does a key exist and its value of type..
 get_match_hk_ops([ {<<"x-?hkexs">>, _, K} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {K, is, nil} | Res]);
+get_match_hk_ops([ {<<"x-?hkexi">>, _, K} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, ii, nil} | Res]);
+get_match_hk_ops([ {<<"x-?hkexa">>, _, K} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, ia, nil} | Res]);
 get_match_hk_ops([ {<<"x-?hkexn">>, _, K} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {K, in, nil} | Res]);
 get_match_hk_ops([ {<<"x-?hkexb">>, _, K} | Tail ], Res) ->
@@ -1393,6 +1459,10 @@ get_match_hk_ops([ {<<"x-?hkexb">>, _, K} | Tail ], Res) ->
 % Does a key exist and its value NOT of type..
 get_match_hk_ops([ {<<"x-?hkex!s">>, _, K} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {K, nis, nil} | Res]);
+get_match_hk_ops([ {<<"x-?hkex!i">>, _, K} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, nii, nil} | Res]);
+get_match_hk_ops([ {<<"x-?hkex!a">>, _, K} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, nia, nil} | Res]);
 get_match_hk_ops([ {<<"x-?hkex!n">>, _, K} | Tail ], Res) ->
     get_match_hk_ops (Tail, [ {K, nin, nil} | Res]);
 get_match_hk_ops([ {<<"x-?hkex!b">>, _, K} | Tail ], Res) ->
