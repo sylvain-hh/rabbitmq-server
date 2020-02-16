@@ -480,9 +480,6 @@ pack_msg_ops([ {K, _, V} | Tail ], VHost, Dests, DestsRE) ->
 % Optimization for headers only..
 is_match({0, Nmin}, {_, MsgProps}, HKRules, [], [], []) ->
     is_match_hk_any(HKRules, MsgProps#'P_basic'.headers, {Nmin, 0}) == true;
-is_match(1, {_, MsgProps}, HKRules, [], [], []) ->
-    is_match_hk_ase(1, HKRules, MsgProps#'P_basic'.headers);
-% set
 is_match({3, Nmin}, {_, MsgProps}, HKRules, [], [], []) ->
     is_match_hk_set(HKRules, MsgProps#'P_basic'.headers, 0) >= Nmin;
 is_match(BT, {_, MsgProps}, HKRules, [], [], []) ->
@@ -742,20 +739,27 @@ is_match_hk({3, Nmin}, Args, Headers) ->
 is_match_hk(BT, Args, Headers) ->
     is_match_hk_ase(BT, Args, Headers).
 
-% all, set0 and eq
+% all and eq
 % --------------------------------------
-% No more match operator to check with all and sets; return true
-is_match_hk_ase(BT, [], _) when BT==1; BT==2; BT==3 -> true;
+% No more match operator to check with all; return true
+is_match_hk_ase(1, [], _) -> true;
 % With eq, return false if there are still some header keys
 is_match_hk_ase(4, [], [_ | _]) -> false;
 is_match_hk_ase(4, [], []) -> true;
 
+
+% !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+% MAYBE WE CAN TREAT NX AND HK? ops the same way like that : {0, nx} ?
 % Purge nx op on no data as all these are true
 is_match_hk_ase(BT, [{_, nx, _} | BNext], []) ->
     is_match_hk_ase(BT, BNext, []);
+% This rule is true for key not required too
+is_match_hk_ase(BT, [{_, {0, _}, _} | BNext], []) ->
+    is_match_hk_ase(BT, BNext, []);
 
-% No more message header but still match operator to check other than nx
+% No more message header but still match operator to check other than nx or hk?
 is_match_hk_ase(_, _, []) -> false;
+
 
 % Current header key not in match operators; go next header with current match operator
 %  With eq return false
@@ -763,8 +767,12 @@ is_match_hk_ase(4, [{BK, _, _} | _], [{HK, _, _} | _])
     when BK > HK -> false;
 is_match_hk_ase(BT, BCur = [{BK, _, _} | _], [{HK, _, _} | HNext])
     when BK > HK -> is_match_hk_ase(BT, BCur, HNext);
+
 % Current binding key must not exist in data, go next binding
 is_match_hk_ase(BT, [{BK, nx, _} | BNext], HCur = [{HK, _, _} | _])
+    when BK < HK -> is_match_hk_ase(BT, BNext, HCur);
+% This rule is true for key not required too
+is_match_hk_ase(BT, [{BK, {0, _}, _} | BNext], HCur = [{HK, _, _} | _])
     when BK < HK -> is_match_hk_ase(BT, BNext, HCur);
 % Current match operator does not exist in message
 is_match_hk_ase(_, [{BK, _, _} | _], [{HK, _, _} | _])
@@ -773,10 +781,10 @@ is_match_hk_ase(_, [{BK, _, _} | _], [{HK, _, _} | _])
 % From here, BK == HK (keys are the same)
 %
 % Current values must match and do match; ok go next
-is_match_hk_ase(BT, [{_, eq, BV} | BNext], [{_, _, HV} | HNext])
+is_match_hk_ase(BT, [{_, {_, eq}, BV} | BNext], [{_, _, HV} | HNext])
     when BV == HV -> is_match_hk_ase(BT, BNext, HNext);
 % Current values must match but do not match; return false
-is_match_hk_ase(_, [{_, eq, _} | _], _) -> false;
+is_match_hk_ase(_, [{_, {_, eq}, _} | _], _) -> false;
 % Key must not exist, return false
 is_match_hk_ase(_, [{_, nx, _} | _], _) -> false;
 % Current header key must exist; ok go next
@@ -837,37 +845,37 @@ is_match_hk_ase(BT, [{_, nia, _} | BNext], [{_, Type, _} | HNext]) ->
     end;
 
 % <= < != > >=
-is_match_hk_ase(BT, [{_, ne, BV} | BNext], HCur = [{_, _, HV} | _])
+is_match_hk_ase(BT, [{_, {_, ne}, BV} | BNext], HCur = [{_, _, HV} | _])
     when BV /= HV -> is_match_hk_ase(BT, BNext, HCur);
-is_match_hk_ase(_, [{_, ne, _} | _], _) -> false;
+is_match_hk_ase(_, [{_, {_, ne}, _} | _], _) -> false;
 
 % Thanks to validation done upstream, gt/ge/lt/le are done only for numeric
-is_match_hk_ase(BT, [{_, gt, BV} | BNext], HCur = [{_, _, HV} | _])
+is_match_hk_ase(BT, [{_, {_, gt}, BV} | BNext], HCur = [{_, _, HV} | _])
     when is_number(HV), HV > BV -> is_match_hk_ase(BT, BNext, HCur);
-is_match_hk_ase(_, [{_, gt, _} | _], _) -> false;
-is_match_hk_ase(BT, [{_, ge, BV} | BNext], HCur = [{_, _, HV} | _])
+is_match_hk_ase(_, [{_, {_, gt}, _} | _], _) -> false;
+is_match_hk_ase(BT, [{_, {_, ge}, BV} | BNext], HCur = [{_, _, HV} | _])
     when is_number(HV), HV >= BV -> is_match_hk_ase(BT, BNext, HCur);
-is_match_hk_ase(_, [{_, ge, _} | _], _) -> false;
-is_match_hk_ase(BT, [{_, lt, BV} | BNext], HCur = [{_, _, HV} | _])
+is_match_hk_ase(_, [{_, {_, ge}, _} | _], _) -> false;
+is_match_hk_ase(BT, [{_, {_, lt}, BV} | BNext], HCur = [{_, _, HV} | _])
     when is_number(HV), HV < BV -> is_match_hk_ase(BT, BNext, HCur);
-is_match_hk_ase(_, [{_, lt, _} | _], _) -> false;
-is_match_hk_ase(BT, [{_, le, BV} | BNext], HCur = [{_, _, HV} | _])
+is_match_hk_ase(_, [{_, {_, lt}, _} | _], _) -> false;
+is_match_hk_ase(BT, [{_, {_, le}, BV} | BNext], HCur = [{_, _, HV} | _])
     when is_number(HV), HV =< BV -> is_match_hk_ase(BT, BNext, HCur);
-is_match_hk_ase(_, [{_, le, _} | _], _) -> false;
+is_match_hk_ase(_, [{_, {_, le}, _} | _], _) -> false;
 
 % Regexes
-is_match_hk_ase(BT, [{_, re, BV} | BNext], HCur = [{_, longstr, HV} | _]) ->
+is_match_hk_ase(BT, [{_, {_, re}, BV} | BNext], HCur = [{_, longstr, HV} | _]) ->
     case re:run(HV, BV, [ {capture, none} ]) of
         match -> is_match_hk_ase(BT, BNext, HCur);
         _ -> false
     end;
-is_match_hk_ase(_, [{_, re, _} | _], _) -> false;
-is_match_hk_ase(BT, [{_, nre, BV} | BNext], HCur = [{_, longstr, HV} | _]) ->
+is_match_hk_ase(_, [{_, {_, re}, _} | _], _) -> false;
+is_match_hk_ase(BT, [{_, {_, nre}, BV} | BNext], HCur = [{_, longstr, HV} | _]) ->
     case re:run(HV, BV, [ {capture, none} ]) of
         nomatch -> is_match_hk_ase(BT, BNext, HCur);
         _ -> false
     end;
-is_match_hk_ase(_, [{_, nre, _} | _], _) -> false.
+is_match_hk_ase(_, [{_, {_, nre}, _} | _], _) -> false.
 
 
 % set
@@ -878,8 +886,11 @@ is_match_hk_set([], _, Res) -> Res;
 % Purge nx op on no data as all these are true
 is_match_hk_set([{_, nx, _} | BNext], [], Res) ->
     is_match_hk_set(BNext, [], Res + 1);
+% In set, key is never required; just go next
+is_match_hk_set([{_, {_, _}, _} | BNext], [], Res) ->
+    is_match_hk_set(BNext, [], Res);
 
-% No more message header but still match operator to check other than nx
+% No more message header but still match operator to check other than nx and hk?
 is_match_hk_set(_, [], Res) -> Res;
 
 % Current header key not in match operators; go next header with current match operator
@@ -889,16 +900,17 @@ is_match_hk_set(BCur = [{BK, _, _} | _], [{HK, _, _} | HNext], Res)
 is_match_hk_set([{BK, nx, _} | BNext], HCur = [{HK, _, _} | _], Res)
     when BK < HK -> is_match_hk_set(BNext, HCur, Res + 1);
 % Current match operator does not exist in message, go next
-is_match_hk_set([{BK, _, _} | NextBs], Hs = [{HK, _, _} | _], Res)
-    when BK < HK -> is_match_hk_set(NextBs, Hs, Res);
+%  (the same apply for not required key)
+is_match_hk_set([{BK, _, _} | BNext], HCur = [{HK, _, _} | _], Res)
+    when BK < HK -> is_match_hk_set(BNext, HCur, Res);
 %
 % From here, BK == HK (keys are the same)
 %
 % Current values must match and do match; ok go next
-is_match_hk_set([{_, eq, BV} | BNext], [{_, _, HV} | HNext], Res)
+is_match_hk_set([{_, {_, eq}, BV} | BNext], [{_, _, HV} | HNext], Res)
     when BV == HV -> is_match_hk_set(BNext, HNext, Res + 1);
 % Current values must match but do not match; return false
-is_match_hk_set([{_, eq, _} | _], _, _) -> -1;
+is_match_hk_set([{_, {_, eq}, _} | _], _, _) -> -1;
 % Key must not exist, return false
 is_match_hk_set([{_, nx, _} | _], _, _) -> -1;
 % Current header key must exist; ok go next
@@ -959,37 +971,37 @@ is_match_hk_set([{_, nia, _} | BNext], [{_, Type, _} | HNext], Res) ->
     end;
 
 % <= < != > >=
-is_match_hk_set([{_, ne, BV} | BNext], HCur = [{_, _, HV} | _], Res)
+is_match_hk_set([{_, {_, ne}, BV} | BNext], HCur = [{_, _, HV} | _], Res)
     when BV /= HV -> is_match_hk_set(BNext, HCur, Res + 1);
-is_match_hk_set([{_, ne, _} | _], _, _) -> -1;
+is_match_hk_set([{_, {_, ne}, _} | _], _, _) -> -1;
 
 % Thanks to validation done upstream, gt/ge/lt/le are done only for numeric
-is_match_hk_set([{_, gt, BV} | BNext], HCur = [{_, _, HV} | _], Res)
+is_match_hk_set([{_, {_, gt}, BV} | BNext], HCur = [{_, _, HV} | _], Res)
     when is_number(HV), HV > BV -> is_match_hk_set(BNext, HCur, Res + 1);
-is_match_hk_set([{_, gt, _} | _], _, _) -> -1;
-is_match_hk_set([{_, ge, BV} | BNext], HCur = [{_, _, HV} | _], Res)
+is_match_hk_set([{_, {_, gt}, _} | _], _, _) -> -1;
+is_match_hk_set([{_, {_, ge}, BV} | BNext], HCur = [{_, _, HV} | _], Res)
     when is_number(HV), HV >= BV -> is_match_hk_set(BNext, HCur, Res + 1);
-is_match_hk_set([{_, ge, _} | _], _, _) -> -1;
-is_match_hk_set([{_, lt, BV} | BNext], HCur = [{_, _, HV} | _], Res)
+is_match_hk_set([{_, {_, ge}, _} | _], _, _) -> -1;
+is_match_hk_set([{_, {_, lt}, BV} | BNext], HCur = [{_, _, HV} | _], Res)
     when is_number(HV), HV < BV -> is_match_hk_set(BNext, HCur, Res + 1);
-is_match_hk_set([{_, lt, _} | _], _, _) -> -1;
-is_match_hk_set([{_, le, BV} | BNext], HCur = [{_, _, HV} | _], Res)
+is_match_hk_set([{_, {_, lt}, _} | _], _, _) -> -1;
+is_match_hk_set([{_, {_, le}, BV} | BNext], HCur = [{_, _, HV} | _], Res)
     when is_number(HV), HV =< BV -> is_match_hk_set(BNext, HCur, Res + 1);
-is_match_hk_set([{_, le, _} | _], _, _) -> -1;
+is_match_hk_set([{_, {_, le}, _} | _], _, _) -> -1;
 
 % Regexes
-is_match_hk_set([{_, re, BV} | BNext], HCur = [{_, longstr, HV} | _], Res) ->
+is_match_hk_set([{_, {_, re}, BV} | BNext], HCur = [{_, longstr, HV} | _], Res) ->
     case re:run(HV, BV, [ {capture, none} ]) of
         match -> is_match_hk_set(BNext, HCur, Res + 1);
         _ -> -1
     end;
-is_match_hk_set([{_, re, _} | _], _, _) -> -1;
-is_match_hk_set([{_, nre, BV} | BNext], HCur = [{_, longstr, HV} | _], Res) ->
+is_match_hk_set([{_, {_, re}, _} | _], _, _) -> -1;
+is_match_hk_set([{_, {_, nre}, BV} | BNext], HCur = [{_, longstr, HV} | _], Res) ->
     case re:run(HV, BV, [ {capture, none} ]) of
         nomatch -> is_match_hk_set(BNext, HCur, Res + 1);
         _ -> -1
     end;
-is_match_hk_set([{_, nre, _} | _], _, _) -> -1.
+is_match_hk_set([{_, {_, nre}, _} | _], _, _) -> -1.
 
 
 % any
@@ -1015,7 +1027,7 @@ is_match_hk_any([{BK, _, _} | BNext], HCur = [{HK, _, _} | _], R)
 % From here, BK == HK
 %
 % Current values must match and do match; add 1
-is_match_hk_any([{_, eq, BV} | BNext], [{_, _, HV} | HNext], {Nmin, N}) when BV == HV ->
+is_match_hk_any([{_, {_, eq}, BV} | BNext], [{_, _, HV} | HNext], {Nmin, N}) when BV == HV ->
     is_match_hk_any(BNext, HNext, {Nmin, N + 1});
 % Current header key must exist; add 1
 is_match_hk_any([{_, ex, _} | BNext], [_ | HNext], {Nmin, N}) ->
@@ -1074,25 +1086,25 @@ is_match_hk_any([{_, nia, _} | BNext], HCur = [{_, Type, _} | HNext], {Nmin, N})
         _ -> is_match_hk_any(BNext, HNext, {Nmin, N + 1})
     end;
 
-is_match_hk_any([{_, ne, BV} | BNext], [{_, _, HV} | HNext], {Nmin, N}) when HV /= BV ->
+is_match_hk_any([{_, {_, ne}, BV} | BNext], [{_, _, HV} | HNext], {Nmin, N}) when HV /= BV ->
     is_match_hk_any(BNext, HNext, {Nmin, N + 1});
 
-is_match_hk_any([{_, gt, BV} | BNext], [{_, _, HV} | HNext], {Nmin, N}) when is_number(HV), HV > BV ->
+is_match_hk_any([{_, {_, gt}, BV} | BNext], [{_, _, HV} | HNext], {Nmin, N}) when is_number(HV), HV > BV ->
     is_match_hk_any(BNext, HNext, {Nmin, N + 1});
-is_match_hk_any([{_, ge, BV} | BNext], [{_, _, HV} | HNext], {Nmin, N}) when is_number(HV), HV >= BV ->
+is_match_hk_any([{_, {_, ge}, BV} | BNext], [{_, _, HV} | HNext], {Nmin, N}) when is_number(HV), HV >= BV ->
     is_match_hk_any(BNext, HNext, {Nmin, N + 1});
-is_match_hk_any([{_, lt, BV} | BNext], [{_, _, HV} | HNext], {Nmin, N}) when is_number(HV), HV < BV ->
+is_match_hk_any([{_, {_, lt}, BV} | BNext], [{_, _, HV} | HNext], {Nmin, N}) when is_number(HV), HV < BV ->
     is_match_hk_any(BNext, HNext, {Nmin, N + 1});
-is_match_hk_any([{_, le, BV} | BNext], [{_, _, HV} | HNext], {Nmin, N}) when is_number(HV), HV =< BV ->
+is_match_hk_any([{_, {_, le}, BV} | BNext], [{_, _, HV} | HNext], {Nmin, N}) when is_number(HV), HV =< BV ->
     is_match_hk_any(BNext, HNext, {Nmin, N + 1});
 
 % Regexes
-is_match_hk_any([{_, re, BV} | BNext], HCur = [ {_, longstr, HV} | HNext], {Nmin, N}) ->
+is_match_hk_any([{_, {_, re}, BV} | BNext], HCur = [ {_, longstr, HV} | HNext], {Nmin, N}) ->
     case re:run(HV, BV, [ {capture, none} ]) of
         match -> is_match_hk_any(BNext, HNext, {Nmin, N + 1});
         _ -> is_match_hk_any(BNext, HCur, {Nmin, N})
     end;
-is_match_hk_any([{_, nre, BV} | BNext], HCur = [ {_, longstr, HV} | HNext], {Nmin, N}) ->
+is_match_hk_any([{_, {_, nre}, BV} | BNext], HCur = [ {_, longstr, HV} | HNext], {Nmin, N}) ->
     case re:run(HV, BV, [ {capture, none} ]) of
         match -> is_match_hk_any(BNext, HCur, {Nmin, N});
         _ -> is_match_hk_any(BNext, HNext, {Nmin, N + 1})
@@ -1177,7 +1189,7 @@ validate_list_type_usage(_, [ {<< RuleKey:10/binary, _/binary >>, array, _} | _]
 % --------------------------------------
 validate_list_type_usage(BT, [ {<< RuleKey/binary >>, array, _} | Tail ], Args) ->
     RKL = binary_to_list(RuleKey),
-    MatchOperators = ["x-?hkv<", "x-?hkv>", "x-?pr<", "x-?pr>", "x-?dt"],
+    MatchOperators = ["x-?hkv<", "x-?hk?v<", "x-?hkv>", "x-?hk?v>", "x-?pr<", "x-?pr>", "x-?dt"],
     case lists:filter(fun(S) -> lists:prefix(S, RKL) end, MatchOperators) of
         [] -> validate_list_type_usage(BT, Tail, Args);
         _ -> {error, {binding_invalid, "Invalid use of list type with < or > operators and/or datetime related", []}}
@@ -1355,26 +1367,50 @@ validate_op([ {<<"x-?hkv<= ", ?ONE_CHAR_AT_LEAST>>, _, Num} | Tail ]) when is_nu
     validate_op(Tail);
 validate_op([ {<<"x-?hkv<= ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
+validate_op([ {<<"x-?hk?v<= ", ?ONE_CHAR_AT_LEAST>>, _, Num} | Tail ]) when is_number(Num) ->
+    validate_op(Tail);
+validate_op([ {<<"x-?hk?v<= ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
+    {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
 validate_op([ {<<"x-?hkv< ", ?ONE_CHAR_AT_LEAST>>, _, Num} | Tail ]) when is_number(Num) ->
     validate_op(Tail);
 validate_op([ {<<"x-?hkv< ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
+    {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
+validate_op([ {<<"x-?hk?v< ", ?ONE_CHAR_AT_LEAST>>, _, Num} | Tail ]) when is_number(Num) ->
+    validate_op(Tail);
+validate_op([ {<<"x-?hk?v< ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
 validate_op([ {<<"x-?hkv>= ", ?ONE_CHAR_AT_LEAST>>, _, Num} | Tail ]) when is_number(Num) ->
     validate_op(Tail);
 validate_op([ {<<"x-?hkv>= ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
+validate_op([ {<<"x-?hk?v>= ", ?ONE_CHAR_AT_LEAST>>, _, Num} | Tail ]) when is_number(Num) ->
+    validate_op(Tail);
+validate_op([ {<<"x-?hk?v>= ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
+    {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
 validate_op([ {<<"x-?hkv> ", ?ONE_CHAR_AT_LEAST>>, _, Num} | Tail ]) when is_number(Num) ->
     validate_op(Tail);
 validate_op([ {<<"x-?hkv> ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
     {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
+validate_op([ {<<"x-?hk?v> ", ?ONE_CHAR_AT_LEAST>>, _, Num} | Tail ]) when is_number(Num) ->
+    validate_op(Tail);
+validate_op([ {<<"x-?hk?v> ", ?ONE_CHAR_AT_LEAST>>, _, _} | _ ]) ->
+    {error, {binding_invalid, "Type's value of comparison's operators < and > must be numeric", []}};
 
 validate_op([ {<<"x-?hkv= ", ?ONE_CHAR_AT_LEAST>>, _, _} | Tail ]) ->
     validate_op(Tail);
+validate_op([ {<<"x-?hk?v= ", ?ONE_CHAR_AT_LEAST>>, _, _} | Tail ]) ->
+    validate_op(Tail);
 validate_op([ {<<"x-?hkv!= ", ?ONE_CHAR_AT_LEAST>>, _, _} | Tail ]) ->
+    validate_op(Tail);
+validate_op([ {<<"x-?hk?v!= ", ?ONE_CHAR_AT_LEAST>>, _, _} | Tail ]) ->
     validate_op(Tail);
 validate_op([ {<<"x-?hkvre ", ?ONE_CHAR_AT_LEAST>>, longstr, Regex} | Tail ]) ->
     validate_regex(Regex, Tail);
+validate_op([ {<<"x-?hk?vre ", ?ONE_CHAR_AT_LEAST>>, longstr, Regex} | Tail ]) ->
+    validate_regex(Regex, Tail);
 validate_op([ {<<"x-?hkv!re ", ?ONE_CHAR_AT_LEAST>>, longstr, Regex} | Tail ]) ->
+    validate_regex(Regex, Tail);
+validate_op([ {<<"x-?hk?v!re ", ?ONE_CHAR_AT_LEAST>>, longstr, Regex} | Tail ]) ->
     validate_regex(Regex, Tail);
 
 validate_op([ {InvalidKey = <<"x-", _/binary>>, _, _} | _ ]) ->
@@ -1477,21 +1513,37 @@ get_match_hk_ops([ {<<"x-?hk!ex">>, _, K} | Tail ], Res) ->
 
 % operators <= < = != > >=
 get_match_hk_ops([ {<<"x-?hkv<= ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, le, V} | Res]);
+    get_match_hk_ops (Tail, [ {K, {1, le}, V} | Res]);
+get_match_hk_ops([ {<<"x-?hk?v<= ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, {0, le}, V} | Res]);
 get_match_hk_ops([ {<<"x-?hkv< ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, lt, V} | Res]);
+    get_match_hk_ops (Tail, [ {K, {1, lt}, V} | Res]);
+get_match_hk_ops([ {<<"x-?hk?v< ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, {0, lt}, V} | Res]);
 get_match_hk_ops([ {<<"x-?hkv= ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, eq, V} | Res]);
+    get_match_hk_ops (Tail, [ {K, {1, eq}, V} | Res]);
+get_match_hk_ops([ {<<"x-?hk?v= ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, {0, eq}, V} | Res]);
 get_match_hk_ops([ {<<"x-?hkvre ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, re, binary_to_list(V)} | Res]);
+    get_match_hk_ops (Tail, [ {K, {1, re}, binary_to_list(V)} | Res]);
+get_match_hk_ops([ {<<"x-?hk?vre ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, {0, re}, binary_to_list(V)} | Res]);
 get_match_hk_ops([ {<<"x-?hkv!= ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, ne, V} | Res]);
+    get_match_hk_ops (Tail, [ {K, {1, ne}, V} | Res]);
+get_match_hk_ops([ {<<"x-?hk?v!= ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, {0, ne}, V} | Res]);
 get_match_hk_ops([ {<<"x-?hkv!re ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, nre, binary_to_list(V)} | Res]);
+    get_match_hk_ops (Tail, [ {K, {1, nre}, binary_to_list(V)} | Res]);
+get_match_hk_ops([ {<<"x-?hk?v!re ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, {0, nre}, binary_to_list(V)} | Res]);
 get_match_hk_ops([ {<<"x-?hkv> ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, gt, V} | Res]);
+    get_match_hk_ops (Tail, [ {K, {1, gt}, V} | Res]);
+get_match_hk_ops([ {<<"x-?hk?v> ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, {0, gt}, V} | Res]);
 get_match_hk_ops([ {<<"x-?hkv>= ", K/binary>>, _, V} | Tail ], Res) ->
-    get_match_hk_ops (Tail, [ {K, ge, V} | Res]);
+    get_match_hk_ops (Tail, [ {K, {1, ge}, V} | Res]);
+get_match_hk_ops([ {<<"x-?hk?v>= ", K/binary>>, _, V} | Tail ], Res) ->
+    get_match_hk_ops (Tail, [ {K, {0, ge}, V} | Res]);
 
 %% All others beginnig with x- are other operators
 get_match_hk_ops([ {<<"x-", _/binary>>, _, _} | Tail ], Res) ->
@@ -1499,7 +1551,7 @@ get_match_hk_ops([ {<<"x-", _/binary>>, _, _} | Tail ], Res) ->
 
 % Headers exchange compatibility : all other cases imply 'eq'
 get_match_hk_ops([ {K, _, V} | T ], Res) ->
-    get_match_hk_ops (T, [ {K, eq, V} | Res]).
+    get_match_hk_ops (T, [ {K, {1, eq}, V} | Res]).
 
 
 %% Get Routing Key operators from binding's arguments
