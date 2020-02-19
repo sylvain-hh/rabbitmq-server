@@ -325,6 +325,7 @@ get_routes(MsgData={_, MsgProps}, [ {_, BT, Dest, {HKRules, RKRules, DTRules, AT
 
     DATREsult = case DATRE of
         nil -> ordsets:from_list([]);
+        {DA1TRE} -> ordsets:from_list(pickoneof([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DA1TRE, [ {capture, none} ]) == match]));
         _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DATRE, [ {capture, none} ]) == match])
     end,
     DAFREsult = case DAFRE of
@@ -1183,7 +1184,9 @@ validate_list_type_usage(any, [ {<<"x-?hk?v!= ", _/binary>>, array, _} | _ ], _)
 % --------------------------------------
 validate_list_type_usage(_, [ {<< RuleKey:9/binary, _/binary >>, array, _} | _], _) when RuleKey==<<"x-addqre-">> ; RuleKey==<<"x-delqre-">> ->
     {error, {binding_invalid, "Invalid use of list type with regex in routing facilities", []}};
-validate_list_type_usage(_, [ {<< RuleKey:10/binary, _/binary >>, array, _} | _], _) when RuleKey==<<"x-addq!re-">> ; RuleKey==<<"x-delq!re-">> ->
+validate_list_type_usage(_, [ {<< RuleKey:10/binary, _/binary >>, array, _} | _], _) when RuleKey==<<"x-addq!re-">> ; RuleKey==<<"x-delq!re-">> ; RuleKey==<<"x-add1qre-">> ->
+    {error, {binding_invalid, "Invalid use of list type with regex in routing facilities", []}};
+validate_list_type_usage(_, [ {<< RuleKey:11/binary, _/binary >>, array, _} | _], _) when RuleKey==<<"x-add1q!re-">> ->
     {error, {binding_invalid, "Invalid use of list type with regex in routing facilities", []}};
 
 % --------------------------------------
@@ -1314,6 +1317,8 @@ validate_op([ {Op, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ])
 validate_op([ {Op, longstr, Regex} | Tail ])
         when Op==<<"x-addqre-ontrue">> orelse Op==<<"x-addq!re-ontrue">> orelse
             Op==<<"x-addqre-onfalse">> orelse Op==<<"x-addq!re-onfalse">> orelse
+            Op==<<"x-add1qre-ontrue">> orelse Op==<<"x-add1q!re-ontrue">> orelse
+            Op==<<"x-add1qre-onfalse">> orelse Op==<<"x-add1q!re-onfalse">> orelse
             Op==<<"x-delqre-ontrue">> orelse Op==<<"x-delq!re-ontrue">> orelse
             Op==<<"x-delqre-onfalse">> orelse Op==<<"x-delq!re-onfalse">> ->
     validate_regex(Regex, Tail);
@@ -1717,6 +1722,10 @@ get_dests_operators(VHost, [{<<"x-addqre-ontrue">>, longstr, R} | T], Dests, {_,
     get_dests_operators(VHost, T, Dests, {R, DAFRE, DDTRE, DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE});
 get_dests_operators(VHost, [{<<"x-addqre-onfalse">>, longstr, R} | T], Dests, {DATRE,_,DDTRE,DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE}) ->
     get_dests_operators(VHost, T, Dests, {DATRE, R, DDTRE, DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE});
+get_dests_operators(VHost, [{<<"x-add1qre-ontrue">>, longstr, R} | T], Dests, {_,DAFRE,DDTRE,DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE}) ->
+    get_dests_operators(VHost, T, Dests, {{R}, DAFRE, DDTRE, DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE});
+get_dests_operators(VHost, [{<<"x-add1qre-onfalse">>, longstr, R} | T], Dests, {DATRE,_,DDTRE,DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE}) ->
+    get_dests_operators(VHost, T, Dests, {DATRE, {R}, DDTRE, DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE});
 get_dests_operators(VHost, [{<<"x-delqre-ontrue">>, longstr, R} | T], Dests, {DATRE,DAFRE,_,DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE}) ->
     get_dests_operators(VHost, T, Dests, {DATRE, DAFRE, R, DDFRE,DATNRE,DAFNRE,DDTNRE,DDFNRE});
 get_dests_operators(VHost, [{<<"x-delqre-onfalse">>, longstr, R} | T], Dests, {DATRE,DAFRE,DDTRE,_,DATNRE,DAFNRE,DDTNRE,DDFNRE}) ->
@@ -1725,6 +1734,10 @@ get_dests_operators(VHost, [{<<"x-addq!re-ontrue">>, longstr, R} | T], Dests, {D
     get_dests_operators(VHost, T, Dests, {DATRE, DAFRE, DDTRE, DDFRE,R,DAFNRE,DDTNRE,DDFNRE});
 get_dests_operators(VHost, [{<<"x-addq!re-onfalse">>, longstr, R} | T], Dests, {DATRE,DAFRE,DDTRE,DDFRE,DATNRE,_,DDTNRE,DDFNRE}) ->
     get_dests_operators(VHost, T, Dests, {DATRE, DAFRE, DDTRE, DDFRE,DATNRE,R,DDTNRE,DDFNRE});
+get_dests_operators(VHost, [{<<"x-add1q!re-ontrue">>, longstr, R} | T], Dests, {DATRE,DAFRE,DDTRE,DDFRE,_,DAFNRE,DDTNRE,DDFNRE}) ->
+    get_dests_operators(VHost, T, Dests, {DATRE, DAFRE, DDTRE, DDFRE, {R},DAFNRE,DDTNRE,DDFNRE});
+get_dests_operators(VHost, [{<<"x-add1q!re-onfalse">>, longstr, R} | T], Dests, {DATRE,DAFRE,DDTRE,DDFRE,DATNRE,_,DDTNRE,DDFNRE}) ->
+    get_dests_operators(VHost, T, Dests, {DATRE, DAFRE, DDTRE, DDFRE,DATNRE,{R},DDTNRE,DDFNRE});
 get_dests_operators(VHost, [{<<"x-delq!re-ontrue">>, longstr, R} | T], Dests, {DATRE,DAFRE,DDTRE,DDFRE,DATNRE,DAFNRE,_,DDFNRE}) ->
     get_dests_operators(VHost, T, Dests, {DATRE, DAFRE, DDTRE, DDFRE,DATNRE,DAFNRE,R,DDFNRE});
 get_dests_operators(VHost, [{<<"x-delq!re-onfalse">>, longstr, R} | T], Dests, {DATRE,DAFRE,DDTRE,DDFRE,DATNRE,DAFNRE,DDTNRE,_}) ->
@@ -1846,6 +1859,8 @@ get_exchange_config([{<<"max-headers-size">>, _, _} | _], _) ->
 get_exchange_config([_ | Tail], PList) ->
     get_exchange_config(Tail, PList).
 
+
+pickoneof(L) -> lists:nth(1, [X || {_, X} <- lists:sort([ {crypto:strong_rand_bytes(2), N} || N <- L])]).
 
 
 delete(transaction, #exchange{name = XName}, _) ->
