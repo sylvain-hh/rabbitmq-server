@@ -1,0 +1,2 @@
+make run-broker RABBITMQ_NODE_IP_ADDRESS=0.0.0.0 PLUGINS='rabbitmq_management' RABBITMQ_SERVER_START_ARGS="-config /home/dev/rabbitmq.config"
+

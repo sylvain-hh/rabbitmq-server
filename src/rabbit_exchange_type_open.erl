@@ -322,14 +322,14 @@ get_routes(MsgData={_, MsgProps}, [ {_, BT, Dest, {HKRules, RKRules, DTRules, AT
         false -> ordsets:from_list([]);
         _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, MDQNRF, [ report_errors, {capture, none} ]) /= match])
     end,
-
     DATREsult = case DATRE of
         nil -> ordsets:from_list([]);
-        {DA1TRE} -> ordsets:from_list(pickoneof([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DA1TRE, [ {capture, none} ]) == match]));
+        {DATRE1} -> ordsets:from_list(pickoneof([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DATRE1, [ {capture, none} ]) == match]));
         _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DATRE, [ {capture, none} ]) == match])
     end,
     DAFREsult = case DAFRE of
         nil -> ordsets:from_list([]);
+        {DAFRE1} -> ordsets:from_list(pickoneof([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DAFRE1, [ {capture, none} ]) == match]));
         _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DAFRE, [ {capture, none} ]) == match])
     end,
     DDTREsult = case DDTRE of
@@ -342,10 +342,12 @@ get_routes(MsgData={_, MsgProps}, [ {_, BT, Dest, {HKRules, RKRules, DTRules, AT
     end,
     DATNREsult = case DATNRE of
         nil -> ordsets:from_list([]);
+        {DATNRE1} -> ordsets:from_list(pickoneof([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DATNRE1, [ {capture, none} ]) /= match]));
         _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DATNRE, [ {capture, none} ]) /= match])
     end,
     DAFNREsult = case DAFNRE of
         nil -> ordsets:from_list([]);
+        {DAFNRE1} -> ordsets:from_list(pickoneof([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DAFNRE1, [ {capture, none} ]) /= match]));
         _ -> ordsets:from_list([Q || Q = #resource{name = QueueName} <- AllVHQueues, re:run(QueueName, DAFNRE, [ {capture, none} ]) /= match])
     end,
     DDTNREsult = case DDTNRE of
@@ -1314,13 +1316,13 @@ validate_op([ {Op, longstr, <<?ONE_CHAR_AT_LEAST>>} | Tail ])
             Op==<<"x-delq-ontrue">> orelse Op==<<"x-delq-onfalse">> ->
     validate_op(Tail);
 % Dests ops regex (queue)
-validate_op([ {Op, longstr, Regex} | Tail ])
-        when Op==<<"x-addqre-ontrue">> orelse Op==<<"x-addq!re-ontrue">> orelse
-            Op==<<"x-addqre-onfalse">> orelse Op==<<"x-addq!re-onfalse">> orelse
-            Op==<<"x-add1qre-ontrue">> orelse Op==<<"x-add1q!re-ontrue">> orelse
-            Op==<<"x-add1qre-onfalse">> orelse Op==<<"x-add1q!re-onfalse">> orelse
-            Op==<<"x-delqre-ontrue">> orelse Op==<<"x-delq!re-ontrue">> orelse
-            Op==<<"x-delqre-onfalse">> orelse Op==<<"x-delq!re-onfalse">> ->
+validate_op([ {Op, longstr, Regex} | Tail ]) when
+        Op==<<"x-addqre-ontrue">> orelse Op==<<"x-addq!re-ontrue">> orelse
+        Op==<<"x-addqre-onfalse">> orelse Op==<<"x-addq!re-onfalse">> orelse
+        Op==<<"x-add1qre-ontrue">> orelse Op==<<"x-add1q!re-ontrue">> orelse
+        Op==<<"x-add1qre-onfalse">> orelse Op==<<"x-add1q!re-onfalse">> orelse
+        Op==<<"x-delqre-ontrue">> orelse Op==<<"x-delq!re-ontrue">> orelse
+        Op==<<"x-delqre-onfalse">> orelse Op==<<"x-delq!re-onfalse">> ->
     validate_regex(Regex, Tail);
 
 % Msg dests ops
@@ -1860,7 +1862,10 @@ get_exchange_config([_ | Tail], PList) ->
     get_exchange_config(Tail, PList).
 
 
-pickoneof(L) -> lists:nth(1, [X || {_, X} <- lists:sort([ {crypto:strong_rand_bytes(2), N} || N <- L])]).
+pickoneof([]) -> [];
+pickoneof(L) ->
+    {_, Elem} = lists:nth(1, lists:sort([ {crypto:strong_rand_bytes(2), N} || N <- L])),
+    [Elem].
 
 
 delete(transaction, #exchange{name = XName}, _) ->
